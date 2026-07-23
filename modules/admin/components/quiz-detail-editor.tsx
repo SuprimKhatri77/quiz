@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { deleteQuizSet } from "@/actions/admin/quizzes/delete";
 import { cloneQuizSetAsFreeMock } from "@/actions/admin/quizzes/clone-as-free-mock";
 import {
+  setQuizSetFreeMock,
   setQuizSetPublished,
   updateQuizSet,
   updateQuizSetMeta,
@@ -187,6 +188,7 @@ export function QuizDetailEditor({
   const queryClient = useQueryClient();
   const [isPending, startTransition] = useTransition();
   const [isPublishPending, setIsPublishPending] = useState(false);
+  const [isFreeMockPending, setIsFreeMockPending] = useState(false);
   const [quizSet, setQuizSet] = useState(() => toEditorState(initialQuizSet));
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<string, string>>
@@ -383,6 +385,54 @@ export function QuizDetailEditor({
         toast.error("Could not update publish state. Please try again.");
       } finally {
         setIsPublishPending(false);
+      }
+    })();
+  }
+
+  function handleFreeMockToggle(nextIsFreeMock: boolean) {
+    if (isFreeMockPending || quizSet.isFreeMock === nextIsFreeMock) {
+      return;
+    }
+
+    const previousIsFreeMock = quizSet.isFreeMock;
+
+    setQuizSet((current) => ({
+      ...current,
+      isFreeMock: nextIsFreeMock,
+    }));
+    setIsFreeMockPending(true);
+
+    void (async () => {
+      try {
+        const result = await setQuizSetFreeMock({
+          id: quizSet.id,
+          isFreeMock: nextIsFreeMock,
+        });
+
+        if (!result.success) {
+          setQuizSet((current) => ({
+            ...current,
+            isFreeMock: previousIsFreeMock,
+          }));
+          toast.error(result.message);
+          return;
+        }
+
+        toast.success(
+          result.message ??
+            (nextIsFreeMock
+              ? "Marked as free mock."
+              : "Free mock disabled."),
+        );
+        await invalidateQuizLists();
+      } catch {
+        setQuizSet((current) => ({
+          ...current,
+          isFreeMock: previousIsFreeMock,
+        }));
+        toast.error("Could not update free mock state. Please try again.");
+      } finally {
+        setIsFreeMockPending(false);
       }
     })();
   }
@@ -874,12 +924,8 @@ export function QuizDetailEditor({
               <Switch
                 id="edit-free-mock"
                 checked={quizSet.isFreeMock}
-                onCheckedChange={(checked) =>
-                  setQuizSet((current) => ({
-                    ...current,
-                    isFreeMock: checked,
-                  }))
-                }
+                disabled={isFreeMockPending}
+                onCheckedChange={handleFreeMockToggle}
               />
             </div>
           </div>

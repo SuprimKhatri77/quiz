@@ -22,9 +22,11 @@ import {
 } from "@/db/schema";
 import { quizSetHasAttempts } from "@/dal/admin/get-quiz-set";
 import {
+  setQuizSetFreeMockSchema,
   setQuizSetPublishedSchema,
   updateQuizSetMetaSchema,
   updateQuizSetSchema,
+  type SetQuizSetFreeMockInput,
   type SetQuizSetPublishedInput,
   type UpdateQuizSetInput,
   type UpdateQuizSetMetaInput,
@@ -321,6 +323,71 @@ export async function setQuizSetPublished(
   return actionSuccess(
     { id: parsed.data.id, isPublished: parsed.data.isPublished },
     parsed.data.isPublished ? "Quiz set published." : "Quiz set unpublished.",
+  );
+}
+
+export async function setQuizSetFreeMock(
+  input: SetQuizSetFreeMockInput,
+): Promise<ActionResult<{ id: string; isFreeMock: boolean }>> {
+  const admin = await getCurrentAdmin();
+
+  if (!admin.success) {
+    return actionFailure(admin.message);
+  }
+
+  const parsed = setQuizSetFreeMockSchema.safeParse(input);
+
+  if (!parsed.success) {
+    return actionFailure("Invalid free mock state.", zodErrorMap(parsed.error));
+  }
+
+  const existing = await db.query.quizSets.findFirst({
+    where: eq(quizSets.id, parsed.data.id),
+    with: {
+      faculty: {
+        columns: { slug: true },
+      },
+    },
+  });
+
+  if (!existing) {
+    return actionFailure("Quiz set not found.");
+  }
+
+  if (existing.isFreeMock === parsed.data.isFreeMock) {
+    return actionSuccess(
+      { id: existing.id, isFreeMock: existing.isFreeMock },
+      "Free mock state unchanged.",
+    );
+  }
+
+  const freeMockGuard = await assertCanDisableFreeMock(
+    parsed.data.id,
+    parsed.data.isFreeMock,
+    existing.isFreeMock,
+  );
+  if (freeMockGuard) {
+    return freeMockGuard;
+  }
+
+  try {
+    await db
+      .update(quizSets)
+      .set({ isFreeMock: parsed.data.isFreeMock })
+      .where(eq(quizSets.id, parsed.data.id));
+  } catch (error) {
+    console.error("setQuizSetFreeMock failed:", error);
+    return actionFailure("Could not update free mock state. Please try again.");
+  }
+
+  await revalidateQuizPaths(parsed.data.id, existing.faculty.slug);
+  revalidatePath("/mocks");
+
+  return actionSuccess(
+    { id: parsed.data.id, isFreeMock: parsed.data.isFreeMock },
+    parsed.data.isFreeMock
+      ? "Marked as free mock. Generate a shared code on the Codes page."
+      : "Free mock disabled.",
   );
 }
 
