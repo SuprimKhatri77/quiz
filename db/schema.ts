@@ -240,6 +240,8 @@ export const questions = pgTable(
     prompt: text("prompt").notNull(),
     /** Points awarded when answered correctly. Defaults to 1. */
     marks: integer("marks").default(1).notNull(),
+    /** Per-question time limit in seconds once the student starts it. Null = untimed. */
+    timeLimitSeconds: integer("time_limit_seconds"),
     /** Display order within the subject section (1-based). */
     position: integer("position").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -256,6 +258,10 @@ export const questions = pgTable(
     index("questions_quiz_section_id_idx").on(table.quizSectionId),
     check("questions_position_positive", sql`${table.position} > 0`),
     check("questions_marks_positive", sql`${table.marks} > 0`),
+    check(
+      "questions_time_limit_positive",
+      sql`${table.timeLimitSeconds} IS NULL OR ${table.timeLimitSeconds} > 0`,
+    ),
   ],
 );
 
@@ -421,6 +427,36 @@ export const attemptAnswers = pgTable(
   ],
 );
 
+/**
+ * Per-attempt state for timed questions. A row exists once the student starts
+ * the question; `startedAt` is the server-side authority for its countdown and
+ * `selectedOptionId` is the saved answer (only written while the timer runs).
+ */
+export const attemptQuestionStates = pgTable(
+  "attempt_question_states",
+  {
+    id: text("id").primaryKey(),
+    attemptId: text("attempt_id")
+      .notNull()
+      .references(() => quizAttempts.id, { onDelete: "cascade" }),
+    questionId: text("question_id")
+      .notNull()
+      .references(() => questions.id, { onDelete: "restrict" }),
+    startedAt: timestamp("started_at").defaultNow().notNull(),
+    selectedOptionId: text("selected_option_id").references(() => options.id, {
+      onDelete: "set null",
+    }),
+    answeredAt: timestamp("answered_at"),
+  },
+  (table) => [
+    unique("attempt_question_states_attempt_id_question_id_uid").on(
+      table.attemptId,
+      table.questionId,
+    ),
+    index("attempt_question_states_attempt_id_idx").on(table.attemptId),
+  ],
+);
+
 /* ───────────────────────────── Relations ───────────────────────────── */
 
 export const userRelations = relations(user, ({ many }) => ({
@@ -492,6 +528,7 @@ export const questionsRelations = relations(questions, ({ one, many }) => ({
   }),
   options: many(options),
   attemptAnswers: many(attemptAnswers),
+  attemptStates: many(attemptQuestionStates),
 }));
 
 export const optionsRelations = relations(options, ({ one, many }) => ({
@@ -522,6 +559,7 @@ export const quizAttemptsRelations = relations(
       references: [accessCodes.id],
     }),
     answers: many(attemptAnswers),
+    questionStates: many(attemptQuestionStates),
   }),
 );
 
@@ -539,3 +577,21 @@ export const attemptAnswersRelations = relations(attemptAnswers, ({ one }) => ({
     references: [options.id],
   }),
 }));
+
+export const attemptQuestionStatesRelations = relations(
+  attemptQuestionStates,
+  ({ one }) => ({
+    attempt: one(quizAttempts, {
+      fields: [attemptQuestionStates.attemptId],
+      references: [quizAttempts.id],
+    }),
+    question: one(questions, {
+      fields: [attemptQuestionStates.questionId],
+      references: [questions.id],
+    }),
+    selectedOption: one(options, {
+      fields: [attemptQuestionStates.selectedOptionId],
+      references: [options.id],
+    }),
+  }),
+);

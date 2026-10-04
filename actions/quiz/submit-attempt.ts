@@ -12,17 +12,17 @@ import {
 import { db } from "@/db";
 import {
   attemptAnswers,
+  attemptQuestionStates,
   options,
   questions,
   quizAttempts,
   quizSections,
 } from "@/db/schema";
+import { DEADLINE_GRACE_MS, isPastOverallDeadline } from "@/lib/attempt-deadline";
 import {
   submitAttemptSchema,
   type SubmitAttemptInput,
 } from "@/modules/quiz/schemas/attempt";
-
-const DEADLINE_GRACE_MS = 30_000;
 
 export type SubmitSectionResult = {
   sectionId: string;
@@ -81,13 +81,27 @@ export async function submitAttempt(
   }
 
   const now = new Date();
-  const deadlineAt = new Date(
-    attempt.startedAt.getTime() + attempt.quizSet.durationMinutes * 60_000,
+  const pastDeadline = isPastOverallDeadline(
+    attempt.startedAt,
+    attempt.quizSet.durationMinutes,
+    now,
+    DEADLINE_GRACE_MS,
   );
-  const pastDeadline = now.getTime() > deadlineAt.getTime() + DEADLINE_GRACE_MS;
 
   // Server deadline is the only timer authority — ignore client timedOut for auth.
-  const allowPartial = attempt.quizSet.isFreeMock || pastDeadline;
+  // The client's timedOut flag only counts once the server clock agrees the
+  // deadline has passed (no grace), so the auto-submit isn't refused for the
+  // whole grace window. The flag alone never grants partial submit.
+  const reachedDeadline =
+    parsed.data.timedOut === true &&
+    isPastOverallDeadline(
+      attempt.startedAt,
+      attempt.quizSet.durationMinutes,
+      now,
+      0,
+    );
+  const allowPartial =
+    attempt.quizSet.isFreeMock || pastDeadline || reachedDeadline;
 
   const sections = await db.query.quizSections.findMany({
     where: eq(quizSections.quizSetId, attempt.quizSetId),
@@ -102,6 +116,7 @@ export async function submitAttempt(
         columns: {
           id: true,
           marks: true,
+          timeLimitSeconds: true,
         },
         with: {
           options: {
@@ -123,8 +138,50 @@ export async function submitAttempt(
     return actionFailure("This quiz set has no questions.");
   }
 
+  // Timed questions: only the answer saved server-side while the timer ran
+  // counts — client-supplied answers for them are ignored. Untimed questions
+  // still come from the client.
+  const stateRows = await db
+    .select({
+      questionId: attemptQuestionStates.questionId,
+      startedAt: attemptQuestionStates.startedAt,
+      selectedOptionId: attemptQuestionStates.selectedOptionId,
+    })
+    .from(attemptQuestionStates)
+    .where(eq(attemptQuestionStates.attemptId, attemptId));
+  const stateByQuestionId = new Map(
+    stateRows.map((row) => [row.questionId, row]),
+  );
+
+  const effectiveAnswers: Record<string, string> = {};
+  // Timed questions are skippable: unanswered ones never block submitting.
+  const excusedQuestionIds = new Set<string>();
+
+  for (const section of sections) {
+    for (const question of section.questions) {
+      if (question.timeLimitSeconds === null) {
+        const clientAnswer = answers[question.id];
+        if (clientAnswer) {
+          effectiveAnswers[question.id] = clientAnswer;
+        }
+        continue;
+      }
+
+      const state = stateByQuestionId.get(question.id);
+
+      if (state?.selectedOptionId) {
+        effectiveAnswers[question.id] = state.selectedOptionId;
+      } else {
+        excusedQuestionIds.add(question.id);
+      }
+    }
+  }
+
   if (!allowPartial) {
-    const unanswered = questionIds.filter((questionId) => !answers[questionId]);
+    const unanswered = questionIds.filter(
+      (questionId) =>
+        !effectiveAnswers[questionId] && !excusedQuestionIds.has(questionId),
+    );
 
     if (unanswered.length > 0) {
       return actionFailure(
@@ -132,7 +189,7 @@ export async function submitAttempt(
       );
     }
 
-    if (Object.keys(answers).length === 0) {
+    if (Object.keys(effectiveAnswers).length === 0) {
       return actionFailure("Submit at least one answer.");
     }
   }
@@ -140,7 +197,7 @@ export async function submitAttempt(
   const answeredOptionIds = [
     ...new Set(
       questionIds
-        .map((questionId) => answers[questionId])
+        .map((questionId) => effectiveAnswers[questionId])
         .filter((value): value is string => Boolean(value)),
     ),
   ];
@@ -181,7 +238,7 @@ export async function submitAttempt(
   }[] = [];
 
   for (const questionId of questionIds) {
-    const optionId = answers[questionId];
+    const optionId = effectiveAnswers[questionId];
     if (!optionId) {
       continue;
     }
@@ -205,7 +262,7 @@ export async function submitAttempt(
     let score = 0;
 
     for (const question of section.questions) {
-      const selectedId = answers[question.id];
+      const selectedId = effectiveAnswers[question.id];
       if (!selectedId) {
         continue;
       }

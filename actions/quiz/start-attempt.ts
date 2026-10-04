@@ -24,13 +24,11 @@ import {
   getPublishedQuizQuestionsForAttempt,
   type PublicQuizSection,
 } from "@/dal/public/get-quiz-set";
+import { isPastOverallDeadline, overallDeadlineAt } from "@/lib/attempt-deadline";
 import {
   startAttemptSchema,
   type StartAttemptInput,
 } from "@/modules/quiz/schemas/attempt";
-
-/** Match submit-attempt grace so resume and submit agree. */
-const DEADLINE_GRACE_MS = 30_000;
 
 export type StartAttemptResult = {
   attemptId: string;
@@ -39,6 +37,8 @@ export type StartAttemptResult = {
   /** In-progress attempt whose timer already expired — client should submit. */
   deadlineExpired?: boolean;
   startedAt?: string;
+  /** Server clock (ISO) so the client can correct for clock skew. */
+  serverNow?: string;
   durationMinutes?: number;
   deadlineAt?: string;
   /** Take payload — omitted when redirecting to results or auto-submitting. */
@@ -46,17 +46,17 @@ export type StartAttemptResult = {
 };
 
 function deadlinePayload(startedAt: Date, durationMinutes: number) {
-  const deadlineAt = new Date(startedAt.getTime() + durationMinutes * 60_000);
+  const deadlineAt = overallDeadlineAt(startedAt, durationMinutes);
   return {
     startedAt: startedAt.toISOString(),
+    serverNow: new Date().toISOString(),
     durationMinutes,
     deadlineAt: deadlineAt.toISOString(),
   };
 }
 
 function isPastDeadline(startedAt: Date, durationMinutes: number, now: Date) {
-  const deadlineAt = startedAt.getTime() + durationMinutes * 60_000;
-  return now.getTime() > deadlineAt + DEADLINE_GRACE_MS;
+  return isPastOverallDeadline(startedAt, durationMinutes, now);
 }
 
 async function withQuestions(
@@ -228,7 +228,7 @@ export async function startAttempt(
             resumed: true,
             ...timing,
           },
-          "Resuming your in-progress attempt. Answers from before refresh are not restored.",
+          "Resuming your in-progress attempt. Untimed answers from before refresh are not restored; timed questions keep theirs.",
         );
       }
     }

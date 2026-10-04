@@ -25,6 +25,12 @@ import type { FacultyOption } from "@/dal/admin/get-faculties";
 import type { SubjectOption } from "@/dal/admin/get-quiz-set";
 import { getZodFieldErrors } from "@/lib/action-result";
 import { cn } from "@/lib/utils";
+import { totalTimeLimitSeconds } from "@/lib/question-timer";
+import {
+  DurationField,
+  QuestionTimeField,
+  SectionTimeShortcut,
+} from "@/modules/admin/components/question-time-controls";
 import { slugify } from "@/lib/slugify";
 import { SectionQuestionsPastePanel } from "@/modules/admin/components/section-questions-paste-panel";
 import { ConfirmDeleteDialog } from "@/modules/admin/components/confirm-delete-dialog";
@@ -45,6 +51,7 @@ type QuestionDraft = {
   id: string;
   prompt: string;
   marks: number;
+  timeLimitSeconds: number | null;
   options: OptionDraft[];
 };
 
@@ -67,6 +74,7 @@ function createEmptyQuestion(): QuestionDraft {
     id: `q-${Math.random().toString(36).slice(2, 9)}`,
     prompt: "",
     marks: 1,
+    timeLimitSeconds: null,
     options: createEmptyOptions(),
   };
 }
@@ -112,6 +120,16 @@ export function QuizCreateForm({
         "",
     ),
   ]);
+
+  const totalQuestionSeconds = useMemo(
+    () =>
+      totalTimeLimitSeconds(
+        sections.flatMap((section) =>
+          section.questions.map((question) => question.timeLimitSeconds),
+        ),
+      ),
+    [sections],
+  );
 
   const facultySubjects = useMemo(
     () => subjects.filter((subject) => subject.facultyId === facultyId),
@@ -203,7 +221,7 @@ export function QuizCreateForm({
       title,
       slug,
       description,
-      durationMinutes: Number(durationMinutes),
+      durationMinutes,
       facultyId,
       isPublished,
       isFreeMock,
@@ -219,6 +237,7 @@ export function QuizCreateForm({
           questions: section.questions.map((question) => ({
             prompt: question.prompt,
             marks: question.marks,
+            timeLimitSeconds: question.timeLimitSeconds,
             options: question.options.map((option) => ({
               label: option.label,
               isCorrect: option.isCorrect,
@@ -411,21 +430,13 @@ export function QuizCreateForm({
               <p className="text-sm text-destructive">{fieldErrors.facultyId}</p>
             ) : null}
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="quiz-duration">Duration (minutes)</Label>
-            <Input
-              id="quiz-duration"
-              type="number"
-              min={1}
-              value={durationMinutes}
-              onChange={(event) => setDurationMinutes(event.target.value)}
-            />
-            {fieldErrors.durationMinutes ? (
-              <p className="text-sm text-destructive">
-                {fieldErrors.durationMinutes}
-              </p>
-            ) : null}
-          </div>
+          <DurationField
+            id="quiz-duration"
+            value={durationMinutes}
+            onChange={setDurationMinutes}
+            totalQuestionSeconds={totalQuestionSeconds}
+            error={fieldErrors.durationMinutes}
+          />
           <div className="flex items-center justify-between gap-3 border px-3 py-2.5 md:col-span-2">
             <div className="space-y-0.5">
               <Label htmlFor="quiz-published">Publish immediately</Label>
@@ -595,6 +606,17 @@ export function QuizCreateForm({
                 </div>
               </div>
 
+              <SectionTimeShortcut
+                onApply={(seconds) =>
+                  updateSection(section.id, {
+                    questions: section.questions.map((question) => ({
+                      ...question,
+                      timeLimitSeconds: seconds,
+                    })),
+                  })
+                }
+              />
+
               <SectionQuestionsPastePanel
                 sectionId={section.id}
                 questionCount={section.questions.length}
@@ -665,6 +687,15 @@ export function QuizCreateForm({
                         </Button>
                       ) : null}
                     </div>
+
+                    <QuestionTimeField
+                      value={question.timeLimitSeconds}
+                      onChange={(timeLimitSeconds) =>
+                        updateQuestion(section.id, question.id, {
+                          timeLimitSeconds,
+                        })
+                      }
+                    />
 
                     <div className="space-y-1.5">
                       {question.options.map((option, optionIndex) => (

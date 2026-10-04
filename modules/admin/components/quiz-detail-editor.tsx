@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { ArrowLeft, ExternalLink, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -41,6 +41,12 @@ import type {
   SubjectOption,
 } from "@/dal/admin/get-quiz-set";
 import { cn } from "@/lib/utils";
+import { totalTimeLimitSeconds } from "@/lib/question-timer";
+import {
+  DurationField,
+  QuestionTimeField,
+  SectionTimeShortcut,
+} from "@/modules/admin/components/question-time-controls";
 import { getZodFieldErrors } from "@/lib/action-result";
 import { slugify } from "@/lib/slugify";
 import { ConfirmDeleteDialog } from "@/modules/admin/components/confirm-delete-dialog";
@@ -65,6 +71,7 @@ type QuestionDraft = {
   id: string;
   prompt: string;
   marks: number;
+  timeLimitSeconds: number | null;
   options: OptionDraft[];
 };
 
@@ -103,6 +110,7 @@ function createEmptyQuestion(): QuestionDraft {
     id: `q-${Math.random().toString(36).slice(2, 9)}`,
     prompt: "",
     marks: 1,
+    timeLimitSeconds: null,
     options: createEmptyOptions(),
   };
 }
@@ -137,6 +145,7 @@ function structureSignature(sections: SectionDraft[]) {
         id: isClientDraftId(question.id, "q-") ? null : question.id,
         prompt: question.prompt,
         marks: question.marks,
+        timeLimitSeconds: question.timeLimitSeconds,
         options: question.options.map((option) => ({
           label: option.label,
           isCorrect: option.isCorrect,
@@ -167,6 +176,7 @@ function toEditorState(quizSet: AdminQuizSetDetail): EditorState {
         id: question.id,
         prompt: question.prompt,
         marks: question.marks,
+        timeLimitSeconds: question.timeLimitSeconds,
         options: question.options.map((option) => ({
           id: option.id,
           label: option.label,
@@ -211,6 +221,15 @@ export function QuizDetailEditor({
     label: string;
   } | null>(null);
   const locked = quizSet.hasAttempts;
+  const totalQuestionSeconds = useMemo(
+    () =>
+      totalTimeLimitSeconds(
+        quizSet.sections.flatMap((section) =>
+          section.questions.map((question) => question.timeLimitSeconds),
+        ),
+      ),
+    [quizSet.sections],
+  );
   const structureBaselineRef = useRef(
     structureSignature(toEditorState(initialQuizSet).sections),
   );
@@ -492,6 +511,7 @@ export function QuizDetailEditor({
             id: isClientDraftId(question.id, "q-") ? undefined : question.id,
             prompt: question.prompt,
             marks: question.marks,
+            timeLimitSeconds: question.timeLimitSeconds,
             options: question.options.map((option) => ({
               label: option.label,
               isCorrect: option.isCorrect,
@@ -527,6 +547,7 @@ export function QuizDetailEditor({
             id: question.id,
             prompt: question.prompt,
             marks: question.marks,
+            timeLimitSeconds: question.timeLimitSeconds,
             options: question.options.map((option) => ({
               id: option.id,
               label: option.label,
@@ -877,27 +898,15 @@ export function QuizDetailEditor({
                 rows={3}
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="edit-duration">Duration (minutes)</Label>
-              <Input
-                id="edit-duration"
-                type="number"
-                min={1}
-                value={quizSet.durationMinutes}
-                aria-invalid={Boolean(fieldErrors.durationMinutes)}
-                onChange={(event) =>
-                  setQuizSet((current) => ({
-                    ...current,
-                    durationMinutes: event.target.value,
-                  }))
-                }
-              />
-              {fieldErrors.durationMinutes ? (
-                <p className="text-sm text-destructive">
-                  {fieldErrors.durationMinutes}
-                </p>
-              ) : null}
-            </div>
+            <DurationField
+              id="edit-duration"
+              value={quizSet.durationMinutes}
+              onChange={(durationMinutes) =>
+                setQuizSet((current) => ({ ...current, durationMinutes }))
+              }
+              totalQuestionSeconds={totalQuestionSeconds}
+              error={fieldErrors.durationMinutes}
+            />
             <div className="flex items-center justify-between gap-3 border px-3 py-2.5">
               <div className="space-y-0.5">
                 <Label htmlFor="edit-published">Published</Label>
@@ -1092,6 +1101,20 @@ export function QuizDetailEditor({
             </div>
 
             {!locked ? (
+              <SectionTimeShortcut
+                onApply={(seconds) =>
+                  updateSection(section.id, (current) => ({
+                    ...current,
+                    questions: current.questions.map((question) => ({
+                      ...question,
+                      timeLimitSeconds: seconds,
+                    })),
+                  }))
+                }
+              />
+            ) : null}
+
+            {!locked ? (
               <SectionQuestionsPastePanel
                 sectionId={section.id}
                 questionCount={section.questions.length}
@@ -1159,6 +1182,16 @@ export function QuizDetailEditor({
                       </Button>
                     ) : null}
                   </div>
+
+                  <QuestionTimeField
+                    value={question.timeLimitSeconds}
+                    disabled={locked}
+                    onChange={(timeLimitSeconds) =>
+                      updateQuestion(section.id, question.id, {
+                        timeLimitSeconds,
+                      })
+                    }
+                  />
 
                   <div className="space-y-1.5">
                     {question.options.map((option, optionIndex) => (
