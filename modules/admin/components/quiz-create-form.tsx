@@ -25,7 +25,7 @@ import type { FacultyOption } from "@/dal/admin/get-faculties";
 import type { SubjectOption } from "@/dal/admin/get-quiz-set";
 import { getZodFieldErrors } from "@/lib/action-result";
 import { cn } from "@/lib/utils";
-import { derivedDurationMinutes } from "@/lib/question-timer";
+import { totalTimeLimitSeconds } from "@/lib/question-timer";
 import {
   DurationField,
   QuestionTimeField,
@@ -121,9 +121,9 @@ export function QuizCreateForm({
     ),
   ]);
 
-  const derivedMinutes = useMemo(
+  const totalQuestionSeconds = useMemo(
     () =>
-      derivedDurationMinutes(
+      totalTimeLimitSeconds(
         sections.flatMap((section) =>
           section.questions.map((question) => question.timeLimitSeconds),
         ),
@@ -221,8 +221,7 @@ export function QuizCreateForm({
       title,
       slug,
       description,
-      // Ignored server-side when every question is timed (derived instead).
-      durationMinutes: derivedMinutes === null ? durationMinutes : undefined,
+      durationMinutes,
       facultyId,
       isPublished,
       isFreeMock,
@@ -435,7 +434,7 @@ export function QuizCreateForm({
             id="quiz-duration"
             value={durationMinutes}
             onChange={setDurationMinutes}
-            derivedMinutes={derivedMinutes}
+            totalQuestionSeconds={totalQuestionSeconds}
             error={fieldErrors.durationMinutes}
           />
           <div className="flex items-center justify-between gap-3 border px-3 py-2.5 md:col-span-2">

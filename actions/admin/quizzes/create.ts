@@ -10,7 +10,7 @@ import {
   zodErrorMap,
   type ActionResult,
 } from "@/lib/action-result";
-import { resolveDurationMinutes } from "@/lib/question-timer";
+import { validateDuration } from "@/lib/question-timer";
 import { getCurrentAdmin } from "@/lib/auth/get-current-admin";
 import { db } from "@/db";
 import {
@@ -46,7 +46,7 @@ export async function createQuizSet(
 
   const data = parsed.data;
 
-  const duration = resolveDurationMinutes(
+  const duration = validateDuration(
     data.sections.flatMap((section) =>
       section.questions.map((question) => question.timeLimitSeconds),
     ),

@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  derivedDurationMinutes,
   isQuestionExpired,
-  resolveDurationMinutes,
   questionExpiresAt,
+  totalTimeLimitSeconds,
+  validateDuration,
 } from "./question-timer";
 
 const start = new Date("2026-01-01T10:00:00Z");
@@ -35,46 +35,32 @@ describe("questionExpiresAt", () => {
   });
 });
 
-describe("derivedDurationMinutes", () => {
-  test("sums and rounds up when all timed", () => {
-    expect(derivedDurationMinutes([60, 90, 45])).toBe(4);
+describe("validateDuration", () => {
+  test("accepts limits within the overall time, regardless of sum", () => {
+    expect(validateDuration([3000, 3000, 3000], 60)).toEqual({
+      ok: true,
+      minutes: 60,
+    });
   });
 
-  test("null when any question is untimed", () => {
-    expect(derivedDurationMinutes([60, null, 45])).toBeNull();
+  test("rejects a question longer than the overall time", () => {
+    expect(validateDuration([3601], 60).ok).toBe(false);
+    expect(validateDuration([3600], 60).ok).toBe(true);
   });
 
-  test("null when there are no questions", () => {
-    expect(derivedDurationMinutes([])).toBeNull();
+  test("duration is always required", () => {
+    expect(validateDuration([], undefined).ok).toBe(false);
+    expect(validateDuration([60], 0).ok).toBe(false);
+    expect(validateDuration([60], 1.5).ok).toBe(false);
+  });
+
+  test("rejects over the maximum", () => {
+    expect(validateDuration([null], 601).ok).toBe(false);
   });
 });
 
-describe("resolveDurationMinutes", () => {
-  test("derives when all timed and ignores provided value", () => {
-    expect(resolveDurationMinutes([60, 60], 999)).toEqual({
-      ok: true,
-      minutes: 2,
-      derived: true,
-    });
-  });
-
-  test("requires provided duration when mixed", () => {
-    expect(resolveDurationMinutes([60, null], undefined).ok).toBe(false);
-    expect(resolveDurationMinutes([60, null], 30)).toEqual({
-      ok: true,
-      minutes: 30,
-      derived: false,
-    });
-  });
-
-  test("rejects derived total over the maximum", () => {
-    expect(resolveDurationMinutes(Array(11).fill(3600), undefined).ok).toBe(
-      false,
-    );
-  });
-
-  test("rejects non-positive or oversized provided value", () => {
-    expect(resolveDurationMinutes([null], 0).ok).toBe(false);
-    expect(resolveDurationMinutes([null], 601).ok).toBe(false);
+describe("totalTimeLimitSeconds", () => {
+  test("sums timed questions only", () => {
+    expect(totalTimeLimitSeconds([60, null, 30])).toBe(90);
   });
 });

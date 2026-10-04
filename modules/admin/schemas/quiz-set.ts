@@ -3,7 +3,7 @@ import { z } from "zod";
 import {
   MAX_QUESTION_TIME_SECONDS,
   MIN_QUESTION_TIME_SECONDS,
-  resolveDurationMinutes,
+  validateDuration,
 } from "@/lib/question-timer";
 import { slugify } from "@/lib/slugify";
 
@@ -95,13 +95,9 @@ export const quizSetMetaSchema = z.object({
     .max(1000, "Description must be at most 1000 characters.")
     .optional()
     .or(z.literal("")),
-  /**
-   * Required unless every question is timed (then derived server-side from the
-   * question limits). Cross-checked in `withDurationRule` / the actions.
-   */
+  /** Overall hard cap in minutes; always required. Range and per-question fit are checked by `validateDuration`. */
   durationMinutes: z.preprocess(
     (value) => (value === "" || value === null ? undefined : value),
-    // Range is checked by resolveDurationMinutes so an ignored (derived) value never blocks saving.
     z.coerce.number().int("Duration must be a whole number.").optional(),
   ),
   facultyId: z.string().min(1, "Select a faculty."),
@@ -109,7 +105,7 @@ export const quizSetMetaSchema = z.object({
   isFreeMock: z.boolean().default(false),
 });
 
-/** Duration is required unless every question has its own time limit. */
+/** Duration is required and every question limit must fit inside it. */
 function withDurationRule<
   T extends {
     durationMinutes?: number;
@@ -120,7 +116,7 @@ function withDurationRule<
     const limits = data.sections.flatMap((section) =>
       section.questions.map((question) => question.timeLimitSeconds),
     );
-    const resolved = resolveDurationMinutes(limits, data.durationMinutes);
+    const resolved = validateDuration(limits, data.durationMinutes);
 
     if (!resolved.ok) {
       ctx.addIssue({

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { ArrowLeft, ExternalLink, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -41,7 +41,7 @@ import type {
   SubjectOption,
 } from "@/dal/admin/get-quiz-set";
 import { cn } from "@/lib/utils";
-import { derivedDurationMinutes } from "@/lib/question-timer";
+import { totalTimeLimitSeconds } from "@/lib/question-timer";
 import {
   DurationField,
   QuestionTimeField,
@@ -221,25 +221,15 @@ export function QuizDetailEditor({
     label: string;
   } | null>(null);
   const locked = quizSet.hasAttempts;
-  const derivedMinutes = useMemo(
+  const totalQuestionSeconds = useMemo(
     () =>
-      derivedDurationMinutes(
+      totalTimeLimitSeconds(
         quizSet.sections.flatMap((section) =>
           section.questions.map((question) => question.timeLimitSeconds),
         ),
       ),
     [quizSet.sections],
   );
-  const previousDerivedRef = useRef(derivedMinutes);
-
-  // Leaving "every question timed" must not silently keep the derived total as
-  // the hard cap: clear it so the admin has to enter one deliberately.
-  useEffect(() => {
-    if (previousDerivedRef.current !== null && derivedMinutes === null) {
-      setQuizSet((current) => ({ ...current, durationMinutes: "" }));
-    }
-    previousDerivedRef.current = derivedMinutes;
-  }, [derivedMinutes]);
   const structureBaselineRef = useRef(
     structureSignature(toEditorState(initialQuizSet).sections),
   );
@@ -566,15 +556,6 @@ export function QuizDetailEditor({
           })),
         })),
       };
-
-      const savedDerived = derivedDurationMinutes(
-        nextState.sections.flatMap((section) =>
-          section.questions.map((question) => question.timeLimitSeconds),
-        ),
-      );
-      if (savedDerived !== null) {
-        nextState.durationMinutes = String(savedDerived);
-      }
 
       setQuizSet(nextState);
       structureBaselineRef.current = structureSignature(nextState.sections);
@@ -923,7 +904,7 @@ export function QuizDetailEditor({
               onChange={(durationMinutes) =>
                 setQuizSet((current) => ({ ...current, durationMinutes }))
               }
-              derivedMinutes={derivedMinutes}
+              totalQuestionSeconds={totalQuestionSeconds}
               error={fieldErrors.durationMinutes}
             />
             <div className="flex items-center justify-between gap-3 border px-3 py-2.5">

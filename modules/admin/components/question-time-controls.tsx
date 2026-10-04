@@ -107,24 +107,23 @@ export function SectionTimeShortcut({
   );
 }
 
-/** Overall duration input: read-only and derived when every question is timed. */
+/** Overall duration (hard cap). Always required; each question limit must fit inside it. */
 export function DurationField({
   id,
   value,
   onChange,
-  derivedMinutes,
+  totalQuestionSeconds,
   error,
   disabled,
 }: {
   id: string;
   value: string;
   onChange: (value: string) => void;
-  derivedMinutes: number | null;
+  /** Sum of all question limits, shown for information only. */
+  totalQuestionSeconds: number;
   error?: string;
   disabled?: boolean;
 }) {
-  const derived = derivedMinutes !== null;
-
   return (
     <div className="space-y-2">
       <Label htmlFor={id}>Duration (minutes)</Label>
@@ -132,16 +131,16 @@ export function DurationField({
         id={id}
         type="number"
         min={1}
-        value={derived ? derivedMinutes : value}
-        readOnly={derived}
+        value={value}
         disabled={disabled}
         aria-invalid={Boolean(error)}
         onChange={(event) => onChange(event.target.value)}
       />
       <p className="text-xs text-muted-foreground">
-        {derived
-          ? "Calculated from the question times (sum, rounded up)."
-          : "Required hard cap. Not every question is timed, so set the overall time."}
+        Hard cap for the whole exam. Each question&apos;s time must be within it.
+        {totalQuestionSeconds > 0
+          ? ` Question times add up to ${Math.round(totalQuestionSeconds / 6) / 10} min (students can run several at once).`
+          : ""}
       </p>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
     </div>

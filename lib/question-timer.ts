@@ -24,62 +24,30 @@ export function isQuestionExpired(
   );
 }
 
-/**
- * Overall exam minutes when every question is timed: the sum of the limits,
- * rounded up to whole minutes. Returns null if any question is untimed (or
- * there are no questions), meaning the admin must set the duration.
- */
-export function derivedDurationMinutes(
-  timeLimits: ReadonlyArray<number | null | undefined>,
-): number | null {
-  if (timeLimits.length === 0) {
-    return null;
-  }
-
-  let totalSeconds = 0;
-
-  for (const limit of timeLimits) {
-    if (limit == null) {
-      return null;
-    }
-    totalSeconds += limit;
-  }
-
-  return Math.ceil(totalSeconds / 60);
-}
-
 export const MAX_DURATION_MINUTES = 600;
 
-export type DurationResolution =
-  | { ok: true; minutes: number; derived: boolean }
+/** Total of all question limits in seconds (untimed questions count as 0). Informational only. */
+export function totalTimeLimitSeconds(
+  timeLimits: ReadonlyArray<number | null | undefined>,
+): number {
+  return timeLimits.reduce<number>((sum, limit) => sum + (limit ?? 0), 0);
+}
+
+export type DurationValidation =
+  | { ok: true; minutes: number }
   | { ok: false; message: string };
 
 /**
- * Overall duration for a quiz set. All questions timed -> derived from the sum
- * (any admin-provided value is ignored). Otherwise the admin must provide it.
+ * The admin always sets the overall time (hard cap). Every question's own
+ * limit must fit inside it; the sum of limits is deliberately unconstrained
+ * because students can run several timers at once.
  */
-export function resolveDurationMinutes(
+export function validateDuration(
   timeLimits: ReadonlyArray<number | null | undefined>,
   provided: number | null | undefined,
-): DurationResolution {
-  const derived = derivedDurationMinutes(timeLimits);
-
-  if (derived !== null) {
-    if (derived > MAX_DURATION_MINUTES) {
-      return {
-        ok: false,
-        message: `Question times add up to ${derived} minutes; the maximum is ${MAX_DURATION_MINUTES}.`,
-      };
-    }
-    return { ok: true, minutes: derived, derived: true };
-  }
-
+): DurationValidation {
   if (provided == null || !Number.isInteger(provided) || provided <= 0) {
-    return {
-      ok: false,
-      message:
-        "Set the overall duration — it is required unless every question has its own time.",
-    };
+    return { ok: false, message: "Set the overall duration in minutes." };
   }
 
   if (provided > MAX_DURATION_MINUTES) {
@@ -89,5 +57,14 @@ export function resolveDurationMinutes(
     };
   }
 
-  return { ok: true, minutes: provided, derived: false };
+  const longest = Math.max(0, ...timeLimits.map((limit) => limit ?? 0));
+
+  if (longest > provided * 60) {
+    return {
+      ok: false,
+      message: `A question time (${longest}s) is longer than the overall duration (${provided} min).`,
+    };
+  }
+
+  return { ok: true, minutes: provided };
 }

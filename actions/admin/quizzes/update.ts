@@ -11,7 +11,7 @@ import {
   type ActionResult,
 } from "@/lib/action-result";
 import { getCurrentAdmin } from "@/lib/auth/get-current-admin";
-import { resolveDurationMinutes } from "@/lib/question-timer";
+import { validateDuration } from "@/lib/question-timer";
 import { db } from "@/db";
 import {
   accessCodes,
@@ -256,15 +256,14 @@ export async function updateQuizSetMeta(
     return freeMockGuard;
   }
 
-  // Question limits live in the DB for this path, so derive from there:
-  // all timed -> sum of limits, otherwise the admin-provided cap is required.
+  // Question limits live in the DB for this path; the new duration must still fit them.
   const storedLimits = await db
     .select({ timeLimitSeconds: questions.timeLimitSeconds })
     .from(questions)
     .innerJoin(quizSections, eq(questions.quizSectionId, quizSections.id))
     .where(eq(quizSections.quizSetId, parsed.data.id));
 
-  const duration = resolveDurationMinutes(
+  const duration = validateDuration(
     storedLimits.map((row) => row.timeLimitSeconds),
     parsed.data.durationMinutes,
   );
@@ -489,7 +488,7 @@ export async function updateQuizSet(
     return actionSuccess(saved, metaResult.message ?? "Quiz set updated.");
   }
 
-  const duration = resolveDurationMinutes(
+  const duration = validateDuration(
     data.sections.flatMap((section) =>
       section.questions.map((question) => question.timeLimitSeconds),
     ),
