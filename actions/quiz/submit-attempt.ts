@@ -19,7 +19,6 @@ import {
   quizSections,
 } from "@/db/schema";
 import { DEADLINE_GRACE_MS, isPastOverallDeadline } from "@/lib/attempt-deadline";
-import { isQuestionExpired } from "@/lib/question-timer";
 import {
   submitAttemptSchema,
   type SubmitAttemptInput,
@@ -155,7 +154,7 @@ export async function submitAttempt(
   );
 
   const effectiveAnswers: Record<string, string> = {};
-  // Timed questions that ran out unanswered don't block submitting.
+  // Timed questions are skippable: unanswered ones never block submitting.
   const excusedQuestionIds = new Set<string>();
 
   for (const section of sections) {
@@ -172,10 +171,7 @@ export async function submitAttempt(
 
       if (state?.selectedOptionId) {
         effectiveAnswers[question.id] = state.selectedOptionId;
-      } else if (
-        state &&
-        isQuestionExpired(state.startedAt, question.timeLimitSeconds, now)
-      ) {
+      } else {
         excusedQuestionIds.add(question.id);
       }
     }

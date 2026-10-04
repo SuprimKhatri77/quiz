@@ -391,8 +391,16 @@ export function QuizDetailPage({
       Date.now() + clockOffsetRef.current >= new Date(deadlineAt).getTime();
 
     if (!timedOut && !deadlinePassedLocally && !quizSet.isFreeMock) {
-      const unanswered =
-        totalQuestions - answeredCount - expiredUnansweredCount;
+      // Timed questions are skippable; only untimed ones must be answered.
+      const unanswered = (sections ?? []).reduce(
+        (sum, section) =>
+          sum +
+          section.questions.filter(
+            (question) =>
+              question.timeLimitSeconds === null && !answers[question.id],
+          ).length,
+        0,
+      );
       if (unanswered > 0) {
         toast.error(
           `Answer all questions before submitting (${unanswered} left).`,
