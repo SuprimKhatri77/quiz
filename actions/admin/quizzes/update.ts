@@ -11,6 +11,7 @@ import {
   type ActionResult,
 } from "@/lib/action-result";
 import { getCurrentAdmin } from "@/lib/auth/get-current-admin";
+import { resolveDurationMinutes } from "@/lib/question-timer";
 import { db } from "@/db";
 import {
   accessCodes,
@@ -73,6 +74,7 @@ export type UpdatedQuizSetSection = {
     id: string;
     prompt: string;
     marks: number;
+    timeLimitSeconds: number | null;
     options: Array<{
       id: string;
       label: string;
@@ -92,6 +94,7 @@ type ExistingQuestion = {
   id: string;
   prompt: string;
   marks: number;
+  timeLimitSeconds: number | null;
   position: number;
   options: Array<{ label: string; isCorrect: boolean; position: number }>;
 };
@@ -159,6 +162,7 @@ async function loadUpdatedQuizSetResult(
         id: question.id,
         prompt: question.prompt,
         marks: question.marks,
+        timeLimitSeconds: question.timeLimitSeconds,
         options: question.options.map((option) => ({
           id: option.id,
           label: option.label,
@@ -205,6 +209,7 @@ function questionsUnchanged(
       current.id === question.id &&
       current.prompt === question.prompt &&
       current.marks === question.marks &&
+      current.timeLimitSeconds === question.timeLimitSeconds &&
       current.position === index + 1 &&
       optionsMatch(current.options, question.options)
     );
@@ -251,6 +256,25 @@ export async function updateQuizSetMeta(
     return freeMockGuard;
   }
 
+  // Question limits live in the DB for this path, so derive from there:
+  // all timed -> sum of limits, otherwise the admin-provided cap is required.
+  const storedLimits = await db
+    .select({ timeLimitSeconds: questions.timeLimitSeconds })
+    .from(questions)
+    .innerJoin(quizSections, eq(questions.quizSectionId, quizSections.id))
+    .where(eq(quizSections.quizSetId, parsed.data.id));
+
+  const duration = resolveDurationMinutes(
+    storedLimits.map((row) => row.timeLimitSeconds),
+    parsed.data.durationMinutes,
+  );
+
+  if (!duration.ok) {
+    return actionFailure(duration.message, {
+      durationMinutes: duration.message,
+    });
+  }
+
   try {
     await db
       .update(quizSets)
@@ -258,7 +282,7 @@ export async function updateQuizSetMeta(
         title: parsed.data.title,
         slug: parsed.data.slug,
         description: parsed.data.description || null,
-        durationMinutes: parsed.data.durationMinutes,
+        durationMinutes: duration.minutes,
         isPublished: parsed.data.isPublished,
         isFreeMock: parsed.data.isFreeMock,
       })
@@ -465,6 +489,19 @@ export async function updateQuizSet(
     return actionSuccess(saved, metaResult.message ?? "Quiz set updated.");
   }
 
+  const duration = resolveDurationMinutes(
+    data.sections.flatMap((section) =>
+      section.questions.map((question) => question.timeLimitSeconds),
+    ),
+    data.durationMinutes,
+  );
+
+  if (!duration.ok) {
+    return actionFailure(duration.message, {
+      durationMinutes: duration.message,
+    });
+  }
+
   const subjectIds = data.sections.map((section) => section.subjectId);
   const facultySubjects = await db
     .select({ id: subjects.id })
@@ -491,7 +528,7 @@ export async function updateQuizSet(
           title: data.title,
           slug: data.slug,
           description: data.description || null,
-          durationMinutes: data.durationMinutes,
+          durationMinutes: duration.minutes,
           isPublished: data.isPublished,
           isFreeMock: data.isFreeMock,
         })
@@ -566,6 +603,7 @@ export async function updateQuizSet(
         quizSectionId: string;
         prompt: string;
         marks: number;
+        timeLimitSeconds: number | null;
         position: number;
       }> = [];
       const optionsToInsert: Array<{
@@ -650,6 +688,7 @@ export async function updateQuizSet(
               quizSectionId: sectionId,
               prompt: question.prompt,
               marks: question.marks,
+              timeLimitSeconds: question.timeLimitSeconds,
               position,
             });
 
@@ -676,6 +715,7 @@ export async function updateQuizSet(
               .set({
                 prompt: question.prompt,
                 marks: question.marks,
+                timeLimitSeconds: question.timeLimitSeconds,
                 position,
               })
               .where(

@@ -13,13 +13,15 @@ import {
 } from "react";
 import { toast } from "sonner";
 
+import { saveAnswer } from "@/actions/quiz/save-answer";
 import { startAttempt } from "@/actions/quiz/start-attempt";
+import { startQuestion } from "@/actions/quiz/start-question";
 import { submitAttempt } from "@/actions/quiz/submit-attempt";
-import { MathText } from "@/components/math-text";
 import { Button } from "@/components/ui/button";
 import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import type {
+  PublicQuizQuestion,
   PublicQuizSection,
   PublicQuizSetMeta,
 } from "@/dal/public/get-quiz-set";
@@ -32,13 +34,17 @@ import {
 import { PublicPageShell } from "@/modules/public/components/public-page-shell";
 import { ContentLeakGuard } from "@/modules/quiz/components/content-leak-guard";
 import {
+  formatCountdown,
+  getQuestionStatus,
+  QuestionCard,
+} from "@/modules/quiz/components/quiz-question-card";
+import {
   startAttemptSchema,
   submitAttemptSchema,
 } from "@/modules/quiz/schemas/attempt";
 
 type Step = "code" | "taking";
 
-const OPTION_LETTERS = ["A", "B", "C", "D"] as const;
 const WARN_20_MS = 20 * 60_000;
 const WARN_5_MS = 5 * 60_000;
 
@@ -62,17 +68,6 @@ function resultHref(
   return `/faculty/${quizSet.faculty.slug}/${quizSet.slug}/result?${params.toString()}`;
 }
 
-function formatCountdown(ms: number) {
-  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  }
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
 export function QuizDetailPage({
   quizSet,
   initialCode,
@@ -87,6 +82,7 @@ export function QuizDetailPage({
   const warned20Ref = useRef(false);
   const warned5Ref = useRef(false);
   const autoSubmitRef = useRef(false);
+  const autoSubmitAttemptsRef = useRef(0);
   const [step, setStep] = useState<Step>("code");
   const [accessCode, setAccessCode] = useState(initialCode?.toUpperCase() ?? "");
   const [participantName, setParticipantName] = useState(initialName ?? "");
@@ -102,10 +98,33 @@ export function QuizDetailPage({
   const [sections, setSections] = useState<PublicQuizSection[] | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [hasStoredAttempt, setHasStoredAttempt] = useState(false);
+  const [startingQuestionIds, setStartingQuestionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  // Server time minus client time, so per-question countdowns ignore client clock skew.
+  const clockOffsetRef = useRef(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  // Serializes saves per question so quick re-selections land in order.
+  const saveChainRef = useRef<Map<string, Promise<unknown>>>(new Map());
 
   const totalMarks = quizSet.totalMarks;
   const totalQuestions = quizSet.questionCount;
   const answeredCount = Object.keys(answers).length;
+  const hasTimedQuestions = Boolean(
+    sections?.some((section) =>
+      section.questions.some((question) => question.timeLimitSeconds !== null),
+    ),
+  );
+  const expiredUnansweredCount = (sections ?? []).reduce(
+    (sum, section) =>
+      sum +
+      section.questions.filter(
+        (question) =>
+          !answers[question.id] &&
+          getQuestionStatus(question, nowMs).status === "expired",
+      ).length,
+    0,
+  );
   const progress =
     totalQuestions === 0
       ? 0
@@ -228,12 +247,29 @@ export function QuizDetailPage({
         setParticipantName(nameForResult);
       }
       setDeadlineAt(response.data.deadlineAt);
+      if (response.data.serverNow) {
+        clockOffsetRef.current =
+          new Date(response.data.serverNow).getTime() - Date.now();
+      }
+      setNowMs(Date.now() + clockOffsetRef.current);
       setSections(response.data.sections);
-      setAnswers({});
+      // Timed answers are saved server-side; restore them after a refresh.
+      setAnswers(
+        Object.fromEntries(
+          response.data.sections.flatMap((section) =>
+            section.questions.flatMap((question) =>
+              question.selectedOptionId
+                ? [[question.id, question.selectedOptionId]]
+                : [],
+            ),
+          ),
+        ),
+      );
       setStep("taking");
       warned20Ref.current = false;
       warned5Ref.current = false;
       autoSubmitRef.current = false;
+      autoSubmitAttemptsRef.current = 0;
 
       if (quizSet.isFreeMock) {
         setMockAttemptCookie(quizSet.id, response.data.attemptId, {
@@ -311,10 +347,19 @@ export function QuizDetailPage({
     setIsSubmitting(true);
 
     try {
+      // Timed answers only count once the server has them: let in-flight saves land first.
+      await Promise.allSettled([...saveChainRef.current.values()]);
+
       const response = await submitAttempt(parsed.data);
 
       if (!response.success) {
-        toast.error(response.message);
+        toast.error(response.message, { id: "submit-error" });
+        // Auto-submit at the deadline must not give up after one refusal
+        // (the server may still be inside its grace window): let the ticker retry.
+        if (timedOut && autoSubmitAttemptsRef.current < 8) {
+          autoSubmitAttemptsRef.current += 1;
+          autoSubmitRef.current = false;
+        }
         return;
       }
 
@@ -341,8 +386,13 @@ export function QuizDetailPage({
       return;
     }
 
-    if (!timedOut && !quizSet.isFreeMock) {
-      const unanswered = totalQuestions - answeredCount;
+    const deadlinePassedLocally =
+      deadlineAt !== undefined &&
+      Date.now() + clockOffsetRef.current >= new Date(deadlineAt).getTime();
+
+    if (!timedOut && !deadlinePassedLocally && !quizSet.isFreeMock) {
+      const unanswered =
+        totalQuestions - answeredCount - expiredUnansweredCount;
       if (unanswered > 0) {
         toast.error(
           `Answer all questions before submitting (${unanswered} left).`,
@@ -366,7 +416,8 @@ export function QuizDetailPage({
 
     const deadline = deadlineAt;
     // Don't fire warnings for thresholds already passed (short/resumed attempts).
-    const initialRemaining = new Date(deadline).getTime() - Date.now();
+    const initialRemaining =
+      new Date(deadline).getTime() - (Date.now() + clockOffsetRef.current);
     if (initialRemaining <= WARN_20_MS) {
       warned20Ref.current = true;
     }
@@ -375,7 +426,9 @@ export function QuizDetailPage({
     }
 
     function tick() {
-      const remaining = new Date(deadline).getTime() - Date.now();
+      setNowMs(Date.now() + clockOffsetRef.current);
+      const remaining =
+        new Date(deadline).getTime() - (Date.now() + clockOffsetRef.current);
       const clamped = Math.max(0, remaining);
 
       setRemainingMs((previous) => {
@@ -416,13 +469,115 @@ export function QuizDetailPage({
     await verifyAndStart(accessCode, participantName);
   }
 
-  function selectOption(questionId: string, optionId: string) {
-    if (isSubmitting) return;
+  function selectOption(question: PublicQuizQuestion, optionId: string) {
+    if (isSubmitting || !attemptId) return;
 
-    setAnswers((current) => ({
-      ...current,
-      [questionId]: optionId,
-    }));
+    if (question.timeLimitSeconds === null) {
+      setAnswers((current) => ({ ...current, [question.id]: optionId }));
+      return;
+    }
+
+    if (getQuestionStatus(question, Date.now() + clockOffsetRef.current).status !== "running") {
+      return;
+    }
+
+    const previous = answers[question.id];
+    setAnswers((current) => ({ ...current, [question.id]: optionId }));
+
+    const chain = saveChainRef.current;
+    const run = async () => {
+      const rollback = () =>
+        setAnswers((current) => {
+          const copy = { ...current };
+          if (previous) {
+            copy[question.id] = previous;
+          } else {
+            delete copy[question.id];
+          }
+          return copy;
+        });
+
+      let response;
+      try {
+        response = await saveAnswer({
+          attemptId,
+          questionId: question.id,
+          optionId,
+        });
+      } catch {
+        rollback();
+        toast.error("Could not save your answer. Check your connection.");
+        return;
+      }
+
+      if (response.success) {
+        return;
+      }
+
+      // Rejected (timer ran out, attempt over): roll back to what the server has.
+      rollback();
+
+      if (response.errors?.reason === "attempt_over") {
+        toast.error(response.message);
+        if (!autoSubmitRef.current) {
+          autoSubmitRef.current = true;
+          void submitQuiz(true);
+        }
+        return;
+      }
+
+      toast.error(response.message);
+    };
+    // run never rejects, so one failed save can't block later ones.
+    const prior = chain.get(question.id) ?? Promise.resolve();
+    chain.set(question.id, prior.then(run));
+  }
+
+  async function handleStartQuestion(questionId: string) {
+    if (!attemptId || isSubmitting || startingQuestionIds.has(questionId)) {
+      return;
+    }
+
+    setStartingQuestionIds((current) => new Set(current).add(questionId));
+
+    try {
+      const response = await startQuestion({ attemptId, questionId });
+
+      if (!response.success) {
+        toast.error(response.message);
+        if (response.errors?.reason === "attempt_over" && !autoSubmitRef.current) {
+          autoSubmitRef.current = true;
+          void submitQuiz(true);
+        }
+        return;
+      }
+
+      clockOffsetRef.current =
+        new Date(response.data.serverNow).getTime() - Date.now();
+      setNowMs(Date.now() + clockOffsetRef.current);
+      setSections((current) =>
+        current
+          ? current.map((section) => ({
+              ...section,
+              questions: section.questions.map((question) =>
+                question.id === questionId
+                  ? {
+                      ...question,
+                      content: response.data.content,
+                      startedAt: response.data.startedAt,
+                    }
+                  : question,
+              ),
+            }))
+          : current,
+      );
+    } finally {
+      setStartingQuestionIds((current) => {
+        const copy = new Set(current);
+        copy.delete(questionId);
+        return copy;
+      });
+    }
   }
 
   return (
@@ -502,7 +657,7 @@ export function QuizDetailPage({
               {isVerifying && initialCode
                 ? "Validating your access code and opening the quiz set."
                 : quizSet.isFreeMock
-                  ? "Use the shared mock code and your name. The timer starts when you begin. Refreshing mid-mock keeps the timer but does not restore prior answers."
+                  ? "Use the shared mock code and your name. The timer starts when you begin. Refreshing mid-mock keeps the timer; untimed answers are not restored, timed-question answers are."
                   : "One code unlocks the full faculty set — all subject sections on this page."}
             </p>
           </div>
@@ -594,6 +749,9 @@ export function QuizDetailPage({
               <div className="flex items-center justify-between gap-4 text-sm">
                 <p className="text-muted-foreground">
                   {answeredCount} of {totalQuestions} answered
+                  {expiredUnansweredCount > 0
+                    ? ` · ${expiredUnansweredCount} timed out`
+                    : ""}
                 </p>
                 <div className="flex items-center gap-3 font-medium">
                   {remainingMs !== undefined ? (
@@ -618,7 +776,11 @@ export function QuizDetailPage({
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 {sections.map((section) => {
-                  const done = section.questions.every((q) => answers[q.id]);
+                  const done = section.questions.every(
+                    (q) =>
+                      answers[q.id] ||
+                      getQuestionStatus(q, nowMs).status === "expired",
+                  );
                   return (
                     <a
                       key={section.id}
@@ -642,7 +804,10 @@ export function QuizDetailPage({
                 key={section.id}
                 section={section}
                 answers={answers}
+                nowMs={nowMs}
+                startingQuestionIds={startingQuestionIds}
                 disabled={isSubmitting}
+                onStart={handleStartQuestion}
                 onSelect={selectOption}
               />
             ))}
@@ -668,13 +833,19 @@ export function QuizDetailPage({
 function SubjectSection({
   section,
   answers,
+  nowMs,
+  startingQuestionIds,
   disabled = false,
+  onStart,
   onSelect,
 }: {
   section: PublicQuizSection;
   answers: Record<string, string>;
+  nowMs: number;
+  startingQuestionIds: Set<string>;
   disabled?: boolean;
-  onSelect: (questionId: string, optionId: string) => void;
+  onStart: (questionId: string) => void;
+  onSelect: (question: PublicQuizQuestion, optionId: string) => void;
 }) {
   return (
     <div id={`section-${section.id}`} className="scroll-mt-28 space-y-5">
@@ -693,56 +864,23 @@ function SubjectSection({
       </div>
 
       <div className="space-y-4">
-        {section.questions.map((question) => (
-          <article key={question.id} className="border bg-card p-5 md:p-6">
-            <p className="font-mono text-xs tracking-wide text-muted-foreground uppercase">
-              Q{question.position}
-            </p>
-            <MathText
-              as="h3"
-              text={question.prompt}
-              className="mt-2 text-base font-medium leading-7 md:text-lg"
+        {section.questions.map((question) => {
+          const { status, remainingMs } = getQuestionStatus(question, nowMs);
+
+          return (
+            <QuestionCard
+              key={question.id}
+              question={question}
+              status={status}
+              remainingMs={remainingMs}
+              selectedOptionId={answers[question.id]}
+              disabled={disabled}
+              isStarting={startingQuestionIds.has(question.id)}
+              onStart={onStart}
+              onSelect={onSelect}
             />
-
-            <div className="mt-5 space-y-2.5">
-              {question.options.map((option, index) => {
-                const selected = answers[question.id] === option.id;
-
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => onSelect(question.id, option.id)}
-                    className={cn(
-                      "flex w-full items-start gap-3 border px-4 py-3.5 text-left transition-colors",
-                      selected
-                        ? "border-foreground bg-muted"
-                        : "hover:bg-muted/60",
-                      disabled &&
-                        "cursor-not-allowed opacity-60 hover:bg-transparent",
-                      disabled && selected && "hover:bg-muted",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "mt-0.5 flex size-7 shrink-0 items-center justify-center border text-xs font-medium",
-                        selected &&
-                          "border-foreground bg-foreground text-background",
-                      )}
-                    >
-                      {OPTION_LETTERS[index]}
-                    </span>
-                    <MathText
-                      text={option.label}
-                      className="text-sm leading-6"
-                    />
-                  </button>
-                );
-              })}
-            </div>
-          </article>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

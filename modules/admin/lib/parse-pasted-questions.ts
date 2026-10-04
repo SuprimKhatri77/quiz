@@ -366,12 +366,14 @@ export function parsedQuestionsToDrafts(
   id: string;
   prompt: string;
   marks: number;
+  timeLimitSeconds: number | null;
   options: Array<{ id: string; label: string; isCorrect: boolean }>;
 }> {
   return questions.map((question) => ({
     id: newId("q"),
     prompt: question.prompt,
     marks: 1,
+    timeLimitSeconds: null,
     options: question.options.map((option, index) => ({
       id: newId(`opt-${index + 1}`),
       label: option.label,

@@ -10,6 +10,7 @@ import {
   zodErrorMap,
   type ActionResult,
 } from "@/lib/action-result";
+import { resolveDurationMinutes } from "@/lib/question-timer";
 import { getCurrentAdmin } from "@/lib/auth/get-current-admin";
 import { db } from "@/db";
 import {
@@ -44,6 +45,19 @@ export async function createQuizSet(
   }
 
   const data = parsed.data;
+
+  const duration = resolveDurationMinutes(
+    data.sections.flatMap((section) =>
+      section.questions.map((question) => question.timeLimitSeconds),
+    ),
+    data.durationMinutes,
+  );
+
+  if (!duration.ok) {
+    return actionFailure(duration.message, {
+      durationMinutes: duration.message,
+    });
+  }
 
   const faculty = await db.query.faculties.findFirst({
     where: eq(faculties.id, data.facultyId),
@@ -84,7 +98,7 @@ export async function createQuizSet(
         title: data.title,
         slug: data.slug,
         description: data.description || null,
-        durationMinutes: data.durationMinutes,
+        durationMinutes: duration.minutes,
         isPublished: data.isPublished,
         isFreeMock: data.isFreeMock,
         createdById: admin.adminId,
@@ -109,6 +123,7 @@ export async function createQuizSet(
             quizSectionId: sectionId,
             prompt: question.prompt,
             marks: question.marks,
+            timeLimitSeconds: question.timeLimitSeconds,
             position: questionIndex + 1,
           });
 

@@ -27,6 +27,7 @@ type QuestionDraft = {
   id: string;
   prompt: string;
   marks: number;
+  timeLimitSeconds: number | null;
   options: Array<{ id: string; label: string; isCorrect: boolean }>;
 };
 

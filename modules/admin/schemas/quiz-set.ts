@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  MAX_QUESTION_TIME_SECONDS,
+  MIN_QUESTION_TIME_SECONDS,
+  resolveDurationMinutes,
+} from "@/lib/question-timer";
 import { slugify } from "@/lib/slugify";
 
 const optionSchema = z.object({
@@ -17,6 +22,22 @@ const questionSchema = z.object({
     .int("Question marks must be a whole number.")
     .positive("Question marks must be greater than 0.")
     .default(1),
+  /** Seconds allowed once the student starts the question. Null/blank = untimed. */
+  timeLimitSeconds: z.preprocess(
+    (value) => (value === "" || value === undefined ? null : value),
+    z.coerce
+      .number()
+      .int("Time limit must be a whole number of seconds.")
+      .min(
+        MIN_QUESTION_TIME_SECONDS,
+        `Time limit must be at least ${MIN_QUESTION_TIME_SECONDS} seconds.`,
+      )
+      .max(
+        MAX_QUESTION_TIME_SECONDS,
+        `Time limit must be at most ${MAX_QUESTION_TIME_SECONDS} seconds.`,
+      )
+      .nullable(),
+  ),
   options: z
     .array(optionSchema)
     .length(4, "Each question must have exactly 4 options.")
@@ -74,17 +95,44 @@ export const quizSetMetaSchema = z.object({
     .max(1000, "Description must be at most 1000 characters.")
     .optional()
     .or(z.literal("")),
-  durationMinutes: z.coerce
-    .number()
-    .int("Duration must be a whole number.")
-    .positive("Duration must be greater than 0.")
-    .max(600, "Duration must be at most 600 minutes."),
+  /**
+   * Required unless every question is timed (then derived server-side from the
+   * question limits). Cross-checked in `withDurationRule` / the actions.
+   */
+  durationMinutes: z.preprocess(
+    (value) => (value === "" || value === null ? undefined : value),
+    // Range is checked by resolveDurationMinutes so an ignored (derived) value never blocks saving.
+    z.coerce.number().int("Duration must be a whole number.").optional(),
+  ),
   facultyId: z.string().min(1, "Select a faculty."),
   isPublished: z.boolean().default(false),
   isFreeMock: z.boolean().default(false),
 });
 
-export const createQuizSetSchema = quizSetMetaSchema.extend({
+/** Duration is required unless every question has its own time limit. */
+function withDurationRule<
+  T extends {
+    durationMinutes?: number;
+    sections: { questions: { timeLimitSeconds: number | null }[] }[];
+  },
+>(schema: z.ZodType<T>) {
+  return schema.superRefine((data, ctx) => {
+    const limits = data.sections.flatMap((section) =>
+      section.questions.map((question) => question.timeLimitSeconds),
+    );
+    const resolved = resolveDurationMinutes(limits, data.durationMinutes);
+
+    if (!resolved.ok) {
+      ctx.addIssue({
+        code: "custom",
+        message: resolved.message,
+        path: ["durationMinutes"],
+      });
+    }
+  });
+}
+
+const createQuizSetBaseSchema = quizSetMetaSchema.extend({
   sections: z
     .array(sectionSchema)
     .min(1, "Add at least one subject section.")
@@ -105,9 +153,13 @@ export const createQuizSetSchema = quizSetMetaSchema.extend({
     }),
 });
 
-export const updateQuizSetSchema = createQuizSetSchema.extend({
-  id: z.string().min(1, "Quiz set id is required."),
-});
+export const createQuizSetSchema = withDurationRule(createQuizSetBaseSchema);
+
+export const updateQuizSetSchema = withDurationRule(
+  createQuizSetBaseSchema.extend({
+    id: z.string().min(1, "Quiz set id is required."),
+  }),
+);
 
 export const updateQuizSetMetaSchema = quizSetMetaSchema
   .omit({ facultyId: true })

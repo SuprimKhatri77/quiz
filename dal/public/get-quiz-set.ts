@@ -1,7 +1,12 @@
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { faculties, quizAttempts, quizSets } from "@/db/schema";
+import {
+  attemptQuestionStates,
+  faculties,
+  quizAttempts,
+  quizSets,
+} from "@/db/schema";
 
 export type PublicQuizOption = {
   id: string;
@@ -9,11 +14,25 @@ export type PublicQuizOption = {
   position: number;
 };
 
+export type PublicQuizQuestionContent = {
+  prompt: string;
+  options: PublicQuizOption[];
+};
+
 export type PublicQuizQuestion = {
   id: string;
-  prompt: string;
   position: number;
-  options: PublicQuizOption[];
+  /** Seconds allowed once started; null = untimed. */
+  timeLimitSeconds: number | null;
+  /**
+   * Null while a timed question has not been started — the server withholds
+   * the prompt and options until the student presses Start.
+   */
+  content: PublicQuizQuestionContent | null;
+  /** ISO timestamp the timer started (timed questions only). */
+  startedAt: string | null;
+  /** Server-saved answer for a timed question. */
+  selectedOptionId: string | null;
 };
 
 /** Section summary for the public unlock page — no question prompts/options. */
@@ -183,12 +202,25 @@ export async function getPublishedQuizQuestionsForAttempt(
     return null;
   }
 
-  return loadPublishedQuizQuestions(attempt.quizSetId);
+  return loadPublishedQuizQuestions(attempt.quizSetId, attemptId);
 }
 
 async function loadPublishedQuizQuestions(
   quizSetId: string,
+  attemptId: string,
 ): Promise<PublicQuizSection[] | null> {
+  const stateRows = await db
+    .select({
+      questionId: attemptQuestionStates.questionId,
+      startedAt: attemptQuestionStates.startedAt,
+      selectedOptionId: attemptQuestionStates.selectedOptionId,
+    })
+    .from(attemptQuestionStates)
+    .where(eq(attemptQuestionStates.attemptId, attemptId));
+  const stateByQuestionId = new Map(
+    stateRows.map((row) => [row.questionId, row]),
+  );
+
   const quizSet = await db.query.quizSets.findFirst({
     where: and(eq(quizSets.id, quizSetId), eq(quizSets.isPublished, true)),
     columns: {
@@ -210,6 +242,7 @@ async function loadPublishedQuizQuestions(
               id: true,
               prompt: true,
               position: true,
+              timeLimitSeconds: true,
             },
             with: {
               options: {
@@ -241,16 +274,28 @@ async function loadPublishedQuizQuestions(
     },
     fullMarks: section.fullMarks,
     position: section.position,
-    questions: section.questions.map((question) => ({
-      id: question.id,
-      prompt: question.prompt,
-      position: question.position,
-      options: question.options.map((option) => ({
-        id: option.id,
-        label: option.label,
-        position: option.position,
-      })),
-    })),
+    questions: section.questions.map((question): PublicQuizQuestion => {
+      const state = stateByQuestionId.get(question.id);
+      const hidden = question.timeLimitSeconds !== null && !state;
+
+      return {
+        id: question.id,
+        position: question.position,
+        timeLimitSeconds: question.timeLimitSeconds,
+        content: hidden
+          ? null
+          : {
+              prompt: question.prompt,
+              options: question.options.map((option) => ({
+                id: option.id,
+                label: option.label,
+                position: option.position,
+              })),
+            },
+        startedAt: state ? state.startedAt.toISOString() : null,
+        selectedOptionId: state?.selectedOptionId ?? null,
+      };
+    }),
   }));
 }
 

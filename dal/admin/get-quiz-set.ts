@@ -15,6 +15,7 @@ export type AdminQuizQuestion = {
   id: string;
   prompt: string;
   marks: number;
+  timeLimitSeconds: number | null;
   position: number;
   options: AdminQuizOption[];
 };
@@ -119,6 +120,7 @@ export async function getQuizSetById(
         id: question.id,
         prompt: question.prompt,
         marks: question.marks,
+        timeLimitSeconds: question.timeLimitSeconds,
         position: question.position,
         options: question.options.map((option) => ({
           id: option.id,

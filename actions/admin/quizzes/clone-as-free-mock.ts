@@ -69,6 +69,7 @@ export async function cloneQuizSetAsFreeMock(
               id: true,
               prompt: true,
               marks: true,
+              timeLimitSeconds: true,
               position: true,
             },
             with: {
@@ -169,6 +170,7 @@ export async function cloneQuizSetAsFreeMock(
             quizSectionId: sectionId,
             prompt: question.prompt,
             marks: question.marks,
+            timeLimitSeconds: question.timeLimitSeconds,
             position: question.position,
           });
 

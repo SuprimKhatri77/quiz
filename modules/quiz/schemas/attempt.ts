@@ -28,6 +28,21 @@ export const submitAttemptSchema = z.object({
 
 export type SubmitAttemptInput = z.infer<typeof submitAttemptSchema>;
 
+export const startQuestionSchema = z.object({
+  attemptId: z.string().min(1, "Attempt is required."),
+  questionId: z.string().min(1, "Question is required."),
+});
+
+export type StartQuestionInput = z.infer<typeof startQuestionSchema>;
+
+export const saveAnswerSchema = z.object({
+  attemptId: z.string().min(1, "Attempt is required."),
+  questionId: z.string().min(1, "Question is required."),
+  optionId: z.string().min(1, "Option is required."),
+});
+
+export type SaveAnswerInput = z.infer<typeof saveAnswerSchema>;
+
 export const resolveAccessCodeSchema = z.object({
   code: z
     .string()
