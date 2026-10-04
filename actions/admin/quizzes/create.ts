@@ -101,6 +101,8 @@ export async function createQuizSet(
         durationMinutes: duration.minutes,
         isPublished: data.isPublished,
         isFreeMock: data.isFreeMock,
+        lockdownEnabled: data.lockdownEnabled,
+        allowedLeaves: data.allowedLeaves,
         createdById: admin.adminId,
       });
 

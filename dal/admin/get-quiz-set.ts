@@ -37,6 +37,8 @@ export type AdminQuizSetDetail = {
   durationMinutes: number;
   isPublished: boolean;
   isFreeMock: boolean;
+  lockdownEnabled: boolean;
+  allowedLeaves: number;
   facultyId: string;
   facultyName: string;
   facultySlug: string;
@@ -106,6 +108,8 @@ export async function getQuizSetById(
     durationMinutes: quizSet.durationMinutes,
     isPublished: quizSet.isPublished,
     isFreeMock: quizSet.isFreeMock,
+    lockdownEnabled: quizSet.lockdownEnabled,
+    allowedLeaves: quizSet.allowedLeaves,
     facultyId: quizSet.faculty.id,
     facultyName: quizSet.faculty.name,
     facultySlug: quizSet.faculty.slug,

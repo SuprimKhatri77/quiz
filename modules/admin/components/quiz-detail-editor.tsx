@@ -51,6 +51,7 @@ import { getZodFieldErrors } from "@/lib/action-result";
 import { slugify } from "@/lib/slugify";
 import { ConfirmDeleteDialog } from "@/modules/admin/components/confirm-delete-dialog";
 import { QuizQuestionsPreviewTrigger } from "@/modules/admin/components/quiz-questions-preview";
+import { LockdownSettingsField } from "@/modules/admin/components/lockdown-settings-field";
 import { SectionQuestionsPastePanel } from "@/modules/admin/components/section-questions-paste-panel";
 import { adminKeys } from "@/modules/admin/hooks/queries/keys";
 import {
@@ -90,6 +91,8 @@ type EditorState = {
   durationMinutes: string;
   isPublished: boolean;
   isFreeMock: boolean;
+  lockdownEnabled: boolean;
+  allowedLeaves: string;
   facultyId: string;
   facultyName: string;
   facultySlug: string;
@@ -164,6 +167,8 @@ function toEditorState(quizSet: AdminQuizSetDetail): EditorState {
     durationMinutes: String(quizSet.durationMinutes),
     isPublished: quizSet.isPublished,
     isFreeMock: quizSet.isFreeMock,
+    lockdownEnabled: quizSet.lockdownEnabled,
+    allowedLeaves: String(quizSet.allowedLeaves),
     facultyId: quizSet.facultyId,
     facultyName: quizSet.facultyName,
     facultySlug: quizSet.facultySlug,
@@ -470,6 +475,8 @@ export function QuizDetailEditor({
           durationMinutes: quizSet.durationMinutes,
           isPublished: quizSet.isPublished,
           isFreeMock: quizSet.isFreeMock,
+          lockdownEnabled: quizSet.lockdownEnabled,
+          allowedLeaves: quizSet.allowedLeaves,
         });
 
         if (!parsed.success) {
@@ -503,6 +510,8 @@ export function QuizDetailEditor({
         facultyId: quizSet.facultyId,
         isPublished: quizSet.isPublished,
         isFreeMock: quizSet.isFreeMock,
+        lockdownEnabled: quizSet.lockdownEnabled,
+        allowedLeaves: quizSet.allowedLeaves,
         sections: quizSet.sections.map((section) => ({
           id: isClientDraftId(section.id, "sec-") ? undefined : section.id,
           subjectId: section.subjectId,
@@ -933,10 +942,24 @@ export function QuizDetailEditor({
               <Switch
                 id="edit-free-mock"
                 checked={quizSet.isFreeMock}
-                disabled={isFreeMockPending}
+                disabled={isFreeMockPending || quizSet.lockdownEnabled}
                 onCheckedChange={handleFreeMockToggle}
               />
             </div>
+            <LockdownSettingsField
+              idPrefix="edit"
+              enabled={quizSet.lockdownEnabled}
+              allowedLeaves={quizSet.allowedLeaves}
+              onEnabledChange={(lockdownEnabled) =>
+                setQuizSet((current) => ({ ...current, lockdownEnabled }))
+              }
+              onAllowedLeavesChange={(allowedLeaves) =>
+                setQuizSet((current) => ({ ...current, allowedLeaves }))
+              }
+              isFreeMock={quizSet.isFreeMock}
+              locked={locked}
+              error={fieldErrors.lockdownEnabled ?? fieldErrors.allowedLeaves}
+            />
           </div>
         </section>
       </div>

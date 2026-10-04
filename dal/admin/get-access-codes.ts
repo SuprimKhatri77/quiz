@@ -5,6 +5,7 @@ import {
   eq,
   gte,
   ilike,
+  inArray,
   isNotNull,
   isNull,
   lt,
@@ -14,7 +15,12 @@ import {
 } from "drizzle-orm";
 
 import { db } from "@/db";
-import { accessCodes, quizAttempts, quizSets } from "@/db/schema";
+import {
+  accessCodes,
+  attemptLeaveEvents,
+  quizAttempts,
+  quizSets,
+} from "@/db/schema";
 import { requireAdminForDal } from "@/dal/admin/require-admin";
 import { ADMIN_PAGE_SIZE } from "@/modules/admin/constants";
 
@@ -24,6 +30,23 @@ export type AccessCodeStatus =
   | "used"
   | "expired"
   | "revoked";
+
+export type CancelledAttemptLeaveEvent = {
+  id: string;
+  occurredAt: string;
+  reason: string;
+  durationMs: number | null;
+  countsAsStrike: boolean;
+  forgiven: boolean;
+};
+
+/** A lockdown-cancelled attempt on a one-time code (void until an admin reopens it). */
+export type CancelledAttemptInfo = {
+  attemptId: string;
+  cancelledAt: string;
+  reason: string | null;
+  events: CancelledAttemptLeaveEvent[];
+};
 
 export type AccessCodeListItem = {
   id: string;
@@ -37,6 +60,7 @@ export type AccessCodeListItem = {
   isShared: boolean;
   hasAttempt: boolean;
   attemptCount: number;
+  cancelledAttempt: CancelledAttemptInfo | null;
   issuedAt: string | null;
   usedAt: string | null;
   expiresAt: string | null;
@@ -188,6 +212,58 @@ export async function getAccessCodes({
     .limit(safePageSize)
     .offset((safePage - 1) * safePageSize);
 
+  const oneTimeCodeIds = rows.filter((row) => !row.isShared).map((row) => row.id);
+  const cancelledByCodeId = new Map<string, CancelledAttemptInfo>();
+
+  if (oneTimeCodeIds.length > 0) {
+    const cancelledAttempts = await db
+      .select({
+        id: quizAttempts.id,
+        accessCodeId: quizAttempts.accessCodeId,
+        cancelledAt: quizAttempts.cancelledAt,
+        cancelReason: quizAttempts.cancelReason,
+      })
+      .from(quizAttempts)
+      .where(
+        and(
+          inArray(quizAttempts.accessCodeId, oneTimeCodeIds),
+          eq(quizAttempts.status, "cancelled"),
+        ),
+      );
+
+    const events =
+      cancelledAttempts.length > 0
+        ? await db
+            .select()
+            .from(attemptLeaveEvents)
+            .where(
+              inArray(
+                attemptLeaveEvents.attemptId,
+                cancelledAttempts.map((attempt) => attempt.id),
+              ),
+            )
+            .orderBy(attemptLeaveEvents.occurredAt)
+        : [];
+
+    for (const attempt of cancelledAttempts) {
+      cancelledByCodeId.set(attempt.accessCodeId, {
+        attemptId: attempt.id,
+        cancelledAt: toDateString(attempt.cancelledAt) ?? "",
+        reason: attempt.cancelReason,
+        events: events
+          .filter((event) => event.attemptId === attempt.id)
+          .map((event) => ({
+            id: event.id,
+            occurredAt: event.occurredAt.toISOString(),
+            reason: event.reason,
+            durationMs: event.durationMs,
+            countsAsStrike: event.countsAsStrike,
+            forgiven: event.forgivenAt !== null,
+          })),
+      });
+    }
+  }
+
   return {
     items: rows.map((row) => {
       const attemptCount = Number(row.attemptCount ?? 0);
@@ -210,6 +286,7 @@ export async function getAccessCodes({
         isShared: row.isShared,
         hasAttempt: attemptCount > 0,
         attemptCount,
+        cancelledAttempt: cancelledByCodeId.get(row.id) ?? null,
         issuedAt: toDateString(row.issuedAt),
         usedAt: toDateString(row.usedAt),
         expiresAt: toDateString(row.expiresAt),

@@ -256,6 +256,18 @@ export async function updateQuizSetMeta(
     return freeMockGuard;
   }
 
+  // Lockdown settings affect running attempts, so they are frozen once any attempt exists.
+  if (
+    (existing.lockdownEnabled !== parsed.data.lockdownEnabled ||
+      existing.allowedLeaves !== parsed.data.allowedLeaves) &&
+    (await quizSetHasAttempts(parsed.data.id))
+  ) {
+    return actionFailure(
+      "Lockdown settings can't be changed after students have started attempts.",
+      { lockdownEnabled: "Locked: this quiz set already has attempts." },
+    );
+  }
+
   // Question limits live in the DB for this path; the new duration must still fit them.
   const storedLimits = await db
     .select({ timeLimitSeconds: questions.timeLimitSeconds })
@@ -284,6 +296,8 @@ export async function updateQuizSetMeta(
         durationMinutes: duration.minutes,
         isPublished: parsed.data.isPublished,
         isFreeMock: parsed.data.isFreeMock,
+        lockdownEnabled: parsed.data.lockdownEnabled,
+        allowedLeaves: parsed.data.allowedLeaves,
       })
       .where(eq(quizSets.id, parsed.data.id));
   } catch (error) {
@@ -384,6 +398,13 @@ export async function setQuizSetFreeMock(
     );
   }
 
+  if (parsed.data.isFreeMock && existing.lockdownEnabled) {
+    return actionFailure(
+      "Turn off lockdown before making this a free mock (lockdown can't be used on free mocks).",
+      { isFreeMock: "Disable lockdown first." },
+    );
+  }
+
   const freeMockGuard = await assertCanDisableFreeMock(
     parsed.data.id,
     parsed.data.isFreeMock,
@@ -473,6 +494,8 @@ export async function updateQuizSet(
       durationMinutes: data.durationMinutes,
       isPublished: data.isPublished,
       isFreeMock: data.isFreeMock,
+      lockdownEnabled: data.lockdownEnabled,
+      allowedLeaves: data.allowedLeaves,
     });
 
     if (!metaResult.success) {
@@ -530,6 +553,8 @@ export async function updateQuizSet(
           durationMinutes: duration.minutes,
           isPublished: data.isPublished,
           isFreeMock: data.isFreeMock,
+          lockdownEnabled: data.lockdownEnabled,
+          allowedLeaves: data.allowedLeaves,
         })
         .where(eq(quizSets.id, data.id));
 

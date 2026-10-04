@@ -398,7 +398,7 @@ export async function getAttemptAnswerSheetByCode({
     score: number;
     maxScore: number;
     completedAt: Date | null;
-    status: "in_progress" | "completed";
+    status: "in_progress" | "completed" | "cancelled";
   } | null = null;
 
   if (attemptId) {

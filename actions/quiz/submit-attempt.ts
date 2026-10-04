@@ -76,6 +76,13 @@ export async function submitAttempt(
     return actionFailure("Attempt not found.");
   }
 
+  if (attempt.status === "cancelled") {
+    return actionFailure(
+      "This attempt was cancelled because the exam window was left.",
+      { reason: "cancelled" },
+    );
+  }
+
   if (attempt.status !== "in_progress") {
     return actionFailure("This attempt has already been submitted.");
   }
@@ -317,6 +324,19 @@ export async function submitAttempt(
         error.message === "ATTEMPT_ALREADY_COMPLETED") ||
       isUniqueViolation(error)
     ) {
+      // A cancel can land between our status check and the guarded update.
+      const [current] = await db
+        .select({ status: quizAttempts.status })
+        .from(quizAttempts)
+        .where(eq(quizAttempts.id, attemptId));
+
+      if (current?.status === "cancelled") {
+        return actionFailure(
+          "This attempt was cancelled because the exam window was left.",
+          { reason: "cancelled" },
+        );
+      }
+
       return actionFailure("This attempt has already been submitted.");
     }
 
