@@ -45,3 +45,6 @@ next-env.d.ts
 # claude local files
 .claude/
 claude.local.md
+
+# local docker test stack
+docker-compose.local.yml

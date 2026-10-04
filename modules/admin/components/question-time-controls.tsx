@@ -21,23 +21,20 @@ export function parseTimeInput(raw: string): number | null {
 }
 
 export function QuestionTimeField({
-  id,
   value,
   onChange,
   disabled,
 }: {
-  id: string;
   value: number | null;
   onChange: (value: number | null) => void;
   disabled?: boolean;
 }) {
+  // The label wraps the input, so no id is needed (draft question ids are
+  // random per render and would break hydration if used as DOM ids).
   return (
-    <div className="flex items-center gap-2">
-      <Label htmlFor={id} className="shrink-0 text-xs text-muted-foreground">
-        Time (sec)
-      </Label>
+    <label className="flex items-center gap-2">
+      <span className="shrink-0 text-xs text-muted-foreground">Time (sec)</span>
       <Input
-        id={id}
         type="number"
         inputMode="numeric"
         min={MIN_QUESTION_TIME_SECONDS}
@@ -48,7 +45,7 @@ export function QuestionTimeField({
         disabled={disabled}
         onChange={(event) => onChange(parseTimeInput(event.target.value))}
       />
-    </div>
+    </label>
   );
 }
 

@@ -689,7 +689,6 @@ export function QuizCreateForm({
                     </div>
 
                     <QuestionTimeField
-                      id={`time-${question.id}`}
                       value={question.timeLimitSeconds}
                       onChange={(timeLimitSeconds) =>
                         updateQuestion(section.id, question.id, {

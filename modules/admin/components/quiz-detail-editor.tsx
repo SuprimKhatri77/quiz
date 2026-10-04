@@ -1184,7 +1184,6 @@ export function QuizDetailEditor({
                   </div>
 
                   <QuestionTimeField
-                    id={`time-${question.id}`}
                     value={question.timeLimitSeconds}
                     disabled={locked}
                     onChange={(timeLimitSeconds) =>
