@@ -67,6 +67,9 @@ export type PublicQuizSetMeta = {
   description: string | null;
   durationMinutes: number;
   isFreeMock: boolean;
+  /** Exam lockdown: leaving the exam window counts as a strike. */
+  lockdownEnabled: boolean;
+  allowedLeaves: number;
   faculty: {
     id: string;
     name: string;
@@ -110,6 +113,8 @@ export async function getPublishedQuizSetByFacultyAndSlug(
       description: true,
       durationMinutes: true,
       isFreeMock: true,
+      lockdownEnabled: true,
+      allowedLeaves: true,
     },
     with: {
       sections: {
@@ -160,6 +165,8 @@ export async function getPublishedQuizSetByFacultyAndSlug(
     description: quizSet.description,
     durationMinutes: quizSet.durationMinutes,
     isFreeMock: quizSet.isFreeMock,
+    lockdownEnabled: quizSet.lockdownEnabled,
+    allowedLeaves: quizSet.allowedLeaves,
     faculty,
     sections,
     questionCount: sections.reduce(
@@ -356,7 +363,7 @@ export async function getPublishedQuizSetRouteByAccessCode(code: string) {
   }
 
   let attemptId: string | null = null;
-  let attemptStatus: "in_progress" | "completed" | null = null;
+  let attemptStatus: "in_progress" | "completed" | "cancelled" | null = null;
 
   if (!isShared) {
     const attempt = await db.query.quizAttempts.findFirst({

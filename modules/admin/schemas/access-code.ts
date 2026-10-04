@@ -16,6 +16,12 @@ export const generateAccessCodesSchema = z.object({
     .or(z.literal("")),
 });
 
+export const reopenAttemptSchema = z.object({
+  attemptId: z.string().min(1, "Attempt id is required."),
+});
+
+export type ReopenAttemptInput = z.infer<typeof reopenAttemptSchema>;
+
 export const deleteAccessCodeSchema = z.object({
   id: z.string().min(1, "Access code id is required."),
 });

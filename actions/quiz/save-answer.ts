@@ -45,6 +45,12 @@ export async function saveAnswer(
     with: { quizSet: { columns: { durationMinutes: true } } },
   });
 
+  if (attempt?.status === "cancelled") {
+    return actionFailure("This attempt was cancelled.", {
+      reason: "cancelled",
+    });
+  }
+
   if (!attempt || attempt.status !== "in_progress") {
     return actionFailure("This attempt is no longer active.", {
       reason: "attempt_over",

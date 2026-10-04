@@ -34,6 +34,8 @@ export type StartAttemptResult = {
   attemptId: string;
   resumed: boolean;
   completed?: boolean;
+  /** Lockdown cancelled this attempt (void until an admin reopens it). */
+  cancelled?: boolean;
   /** In-progress attempt whose timer already expired — client should submit. */
   deadlineExpired?: boolean;
   startedAt?: string;
@@ -44,6 +46,16 @@ export type StartAttemptResult = {
   /** Take payload — omitted when redirecting to results or auto-submitting. */
   sections?: PublicQuizSection[];
 };
+
+const CANCELLED_MESSAGE =
+  "This attempt was cancelled because the exam window was left. Contact your administrator.";
+
+function cancelledResult(attemptId: string) {
+  return actionSuccess(
+    { attemptId, resumed: false, cancelled: true },
+    CANCELLED_MESSAGE,
+  );
+}
 
 function deadlinePayload(startedAt: Date, durationMinutes: number) {
   const deadlineAt = overallDeadlineAt(startedAt, durationMinutes);
@@ -191,6 +203,10 @@ export async function startAttempt(
           quizSet.durationMinutes,
         );
 
+        if (existingAttempt.status === "cancelled") {
+          return cancelledResult(existingAttempt.id);
+        }
+
         if (existingAttempt.status === "completed") {
           return actionSuccess(
             {
@@ -321,6 +337,10 @@ export async function startAttempt(
       quizSet.durationMinutes,
     );
 
+    if (existingOneTime.status === "cancelled") {
+      return cancelledResult(existingOneTime.id);
+    }
+
     if (existingOneTime.status === "completed") {
       return actionSuccess(
         {
@@ -415,6 +435,10 @@ export async function startAttempt(
           startedAt: true,
         },
       });
+
+      if (existing?.status === "cancelled") {
+        return cancelledResult(existing.id);
+      }
 
       if (existing?.status === "in_progress") {
         if (

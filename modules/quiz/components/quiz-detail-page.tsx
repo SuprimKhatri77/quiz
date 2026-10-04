@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, Clock3, Trophy } from "lucide-react";
+import { CheckCircle2, Clock3, ShieldAlert, Trophy } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -33,6 +33,14 @@ import {
 } from "@/lib/mock-attempt-cookie";
 import { PublicPageShell } from "@/modules/public/components/public-page-shell";
 import { ContentLeakGuard } from "@/modules/quiz/components/content-leak-guard";
+import { ExamCancelled } from "@/modules/quiz/components/exam-cancelled";
+import { LockdownBriefing } from "@/modules/quiz/components/lockdown-briefing";
+import { LockdownOverlay } from "@/modules/quiz/components/lockdown-overlay";
+import {
+  enterFullscreen,
+  exitFullscreen,
+  useExamLockdown,
+} from "@/modules/quiz/hooks/use-exam-lockdown";
 import {
   formatCountdown,
   getQuestionStatus,
@@ -43,7 +51,7 @@ import {
   submitAttemptSchema,
 } from "@/modules/quiz/schemas/attempt";
 
-type Step = "code" | "taking";
+type Step = "code" | "briefing" | "taking" | "cancelled";
 
 const WARN_20_MS = 20 * 60_000;
 const WARN_5_MS = 5 * 60_000;
@@ -89,7 +97,11 @@ export function QuizDetailPage({
   const [nameError, setNameError] = useState<string>();
   const [codeError, setCodeError] = useState<string>();
   const [isVerifying, setIsVerifying] = useState(
-    Boolean(initialCode && (!quizSet.isFreeMock || initialName?.trim())),
+    Boolean(
+      initialCode &&
+        !quizSet.lockdownEnabled &&
+        (!quizSet.isFreeMock || initialName?.trim()),
+    ),
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [attemptId, setAttemptId] = useState<string>();
@@ -98,6 +110,8 @@ export function QuizDetailPage({
   const [sections, setSections] = useState<PublicQuizSection[] | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [hasStoredAttempt, setHasStoredAttempt] = useState(false);
+  // Set once the exam is finished (submitted/cancelled) so lockdown stays off while navigating away.
+  const [lockdownDone, setLockdownDone] = useState(false);
   const [startingQuestionIds, setStartingQuestionIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -143,7 +157,7 @@ export function QuizDetailPage({
     code: string,
     name: string,
     { silent = false, forceNew = false } = {},
-  ) {
+  ): Promise<boolean> {
     const resumeAttemptId =
       !forceNew && quizSet.isFreeMock
         ? getMockAttemptCookie(quizSet.id)
@@ -161,7 +175,7 @@ export function QuizDetailPage({
       setCodeError(fieldErrors.code?.[0] ?? parsed.error.issues[0]?.message);
       setNameError(fieldErrors.participantName?.[0]);
       setIsVerifying(false);
-      return;
+      return false;
     }
 
     // New free-mock start needs a name; resume from cookie does not.
@@ -172,7 +186,7 @@ export function QuizDetailPage({
     ) {
       setNameError("Enter your name to start this free mock.");
       setIsVerifying(false);
-      return;
+      return false;
     }
 
     setCodeError(undefined);
@@ -192,11 +206,19 @@ export function QuizDetailPage({
         if (!silent) {
           toast.error(response.message);
         }
-        return;
+        return false;
       }
 
       const nameForResult =
         parsed.data.participantName?.trim() || participantName.trim();
+
+      if (response.data.cancelled) {
+        clearMockAttemptCookie(quizSet.id);
+        setHasStoredAttempt(false);
+        setStep("cancelled");
+        void exitFullscreen();
+        return false;
+      }
 
       if (response.data.completed) {
         clearMockAttemptCookie(quizSet.id);
@@ -208,7 +230,7 @@ export function QuizDetailPage({
             attemptId: response.data.attemptId,
           }),
         );
-        return;
+        return false;
       }
 
       if (response.data.deadlineExpired) {
@@ -232,13 +254,13 @@ export function QuizDetailPage({
           timedOut: true,
           answers: {},
         });
-        return;
+        return false;
       }
 
       if (!response.data.sections?.length) {
         setCodeError("This quiz set has no questions yet.");
         toast.error("This quiz set has no questions yet.");
-        return;
+        return false;
       }
 
       setAttemptId(response.data.attemptId);
@@ -265,6 +287,7 @@ export function QuizDetailPage({
           ),
         ),
       );
+      setLockdownDone(false);
       setStep("taking");
       warned20Ref.current = false;
       warned5Ref.current = false;
@@ -290,6 +313,7 @@ export function QuizDetailPage({
       router.replace(`/faculty/${quizSet.faculty.slug}/${quizSet.slug}`, {
         scroll: false,
       });
+      return true;
     } finally {
       setIsVerifying(false);
     }
@@ -316,6 +340,13 @@ export function QuizDetailPage({
     }
 
     autoStartedRef.current = true;
+
+    if (quizSet.lockdownEnabled) {
+      // Fullscreen needs a click, so show the rules first instead of auto-starting.
+      setStep("briefing");
+      return;
+    }
+
     void verifyAndStart(initialCode, "", { silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialCode, initialName, quizSet.isFreeMock]);
@@ -353,6 +384,10 @@ export function QuizDetailPage({
       const response = await submitAttempt(parsed.data);
 
       if (!response.success) {
+        if (response.errors?.reason === "cancelled") {
+          handleCancelled();
+          return;
+        }
         toast.error(response.message, { id: "submit-error" });
         // Auto-submit at the deadline must not give up after one refusal
         // (the server may still be inside its grace window): let the ticker retry.
@@ -370,6 +405,8 @@ export function QuizDetailPage({
       );
       clearMockAttemptCookie(quizSet.id);
       setHasStoredAttempt(false);
+      setLockdownDone(true);
+      void exitFullscreen();
       router.push(
         resultHref(quizSet, {
           code: code.trim().toUpperCase() || undefined,
@@ -474,8 +511,64 @@ export function QuizDetailPage({
 
   async function handleVerifyCode(event: FormEvent) {
     event.preventDefault();
+
+    if (quizSet.lockdownEnabled) {
+      if (accessCode.trim().length < 4) {
+        setCodeError("Access code looks too short.");
+        return;
+      }
+      setCodeError(undefined);
+      setStep("briefing");
+      return;
+    }
+
     await verifyAndStart(accessCode, participantName);
   }
+
+  async function handleBriefingStart() {
+    // Must run inside the click so the browser grants fullscreen.
+    await enterFullscreen();
+
+    let started = false;
+
+    try {
+      started = await verifyAndStart(accessCode, participantName);
+    } catch {
+      toast.error("Could not start the exam. Check your connection and try again.");
+    }
+
+    if (!started) {
+      await exitFullscreen();
+      setStep((current) => (current === "briefing" ? "code" : current));
+    }
+  }
+
+  function handleCancelled() {
+    autoSubmitRef.current = true;
+    setLockdownDone(true);
+    clearMockAttemptCookie(quizSet.id);
+    setHasStoredAttempt(false);
+    setStep("cancelled");
+    void exitFullscreen();
+  }
+
+  const { isAway, requestReturn } = useExamLockdown({
+    enabled:
+      quizSet.lockdownEnabled &&
+      step === "taking" &&
+      !isSubmitting &&
+      !lockdownDone,
+    attemptId,
+    onWarning: (strikes, allowedLeaves) => {
+      toast.warning(
+        strikes >= allowedLeaves
+          ? `You left the exam window (${strikes} of ${allowedLeaves} allowed). Leaving again will cancel your attempt.`
+          : `You left the exam window (${strikes} of ${allowedLeaves} allowed).`,
+        { duration: 8000 },
+      );
+    },
+    onCancelled: handleCancelled,
+  });
 
   function selectOption(question: PublicQuizQuestion, optionId: string) {
     if (isSubmitting || !attemptId) return;
@@ -525,6 +618,11 @@ export function QuizDetailPage({
       // Rejected (timer ran out, attempt over): roll back to what the server has.
       rollback();
 
+      if (response.errors?.reason === "cancelled") {
+        handleCancelled();
+        return;
+      }
+
       if (response.errors?.reason === "attempt_over") {
         toast.error(response.message);
         if (!autoSubmitRef.current) {
@@ -552,6 +650,10 @@ export function QuizDetailPage({
       const response = await startQuestion({ attemptId, questionId });
 
       if (!response.success) {
+        if (response.errors?.reason === "cancelled") {
+          handleCancelled();
+          return;
+        }
         toast.error(response.message);
         if (response.errors?.reason === "attempt_over" && !autoSubmitRef.current) {
           autoSubmitRef.current = true;
@@ -623,6 +725,12 @@ export function QuizDetailPage({
             icon={<CheckCircle2 className="size-4" />}
             label={`${totalQuestions} questions`}
           />
+          {quizSet.lockdownEnabled ? (
+            <MetaChip
+              icon={<ShieldAlert className="size-4" />}
+              label="Lockdown exam"
+            />
+          ) : null}
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -647,6 +755,19 @@ export function QuizDetailPage({
           </p>
         ) : null}
       </div>
+
+      {step === "briefing" && (
+        <LockdownBriefing
+          allowedLeaves={quizSet.allowedLeaves}
+          isStarting={isVerifying}
+          onStart={() => void handleBriefingStart()}
+          onBack={() => setStep("code")}
+        />
+      )}
+
+      {step === "cancelled" && (
+        <ExamCancelled backHref={`/faculty/${quizSet.faculty.slug}`} />
+      )}
 
       {step === "code" && (
         <section className="w-full max-w-lg border bg-card p-6 md:p-8">
@@ -750,9 +871,11 @@ export function QuizDetailPage({
 
       {step === "taking" && sections ? (
         <ContentLeakGuard
+          lockdown={quizSet.lockdownEnabled}
           watermark={`${quizSet.title} · ${accessCode.trim().toUpperCase() || "QuizDesk"}`}
         >
-          <section className="space-y-10">
+          {isAway ? <LockdownOverlay onReturn={requestReturn} /> : null}
+          <section className={cn("space-y-10", isAway && "invisible")}>
             <div className="sticky top-0 z-10 -mx-6 border-b bg-background/95 px-6 py-4 backdrop-blur">
               <div className="flex items-center justify-between gap-4 text-sm">
                 <p className="text-muted-foreground">

@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { MAX_ALLOWED_LEAVES } from "@/lib/lockdown";
 import {
   MAX_QUESTION_TIME_SECONDS,
   MIN_QUESTION_TIME_SECONDS,
@@ -103,12 +104,33 @@ export const quizSetMetaSchema = z.object({
   facultyId: z.string().min(1, "Select a faculty."),
   isPublished: z.boolean().default(false),
   isFreeMock: z.boolean().default(false),
+  /** Exam lockdown: leaving the exam window counts as a strike. */
+  lockdownEnabled: z.boolean().default(false),
+  /** Leaves tolerated before the attempt is cancelled (0 = cancel on the first leave). */
+  // A cleared input must not silently become 0 ("cancel immediately"): blank -> default 1.
+  allowedLeaves: z.preprocess(
+    (value) => (value === "" || value === null ? undefined : value),
+    z.coerce
+      .number()
+      .int("Allowed leaves must be a whole number.")
+      .min(0, "Allowed leaves can't be negative.")
+      .max(
+        MAX_ALLOWED_LEAVES,
+        `Allowed leaves can be at most ${MAX_ALLOWED_LEAVES}.`,
+      )
+      .default(1),
+  ),
 });
+
+const LOCKDOWN_FREE_MOCK_MESSAGE =
+  "Lockdown can't be used on a free mock (shared codes can't be reset per student).";
 
 /** Duration is required and every question limit must fit inside it. */
 function withDurationRule<
   T extends {
     durationMinutes?: number;
+    isFreeMock: boolean;
+    lockdownEnabled: boolean;
     sections: { questions: { timeLimitSeconds: number | null }[] }[];
   },
 >(schema: z.ZodType<T>) {
@@ -123,6 +145,14 @@ function withDurationRule<
         code: "custom",
         message: resolved.message,
         path: ["durationMinutes"],
+      });
+    }
+
+    if (data.lockdownEnabled && data.isFreeMock) {
+      ctx.addIssue({
+        code: "custom",
+        message: LOCKDOWN_FREE_MOCK_MESSAGE,
+        path: ["lockdownEnabled"],
       });
     }
   });
@@ -161,6 +191,15 @@ export const updateQuizSetMetaSchema = quizSetMetaSchema
   .omit({ facultyId: true })
   .extend({
     id: z.string().min(1, "Quiz set id is required."),
+  })
+  .superRefine((data, ctx) => {
+    if (data.lockdownEnabled && data.isFreeMock) {
+      ctx.addIssue({
+        code: "custom",
+        message: LOCKDOWN_FREE_MOCK_MESSAGE,
+        path: ["lockdownEnabled"],
+      });
+    }
   });
 
 export const deleteQuizSetSchema = z.object({

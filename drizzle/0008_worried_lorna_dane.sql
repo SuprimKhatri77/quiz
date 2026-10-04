@@ -1,0 +1,1 @@
+ALTER TABLE "quiz_sets" ADD CONSTRAINT "quiz_sets_lockdown_not_free_mock" CHECK (NOT ("quiz_sets"."lockdown_enabled" AND "quiz_sets"."is_free_mock"));

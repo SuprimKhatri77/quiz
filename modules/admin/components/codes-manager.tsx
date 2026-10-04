@@ -30,6 +30,7 @@ import {
   AdminPagination,
   AdminTableSkeleton,
 } from "@/modules/admin/components/admin-list-states";
+import { CancelledAttemptDialog } from "@/modules/admin/components/cancelled-attempt-dialog";
 import { ConfirmDeleteDialog } from "@/modules/admin/components/confirm-delete-dialog";
 import {
   Select,
@@ -120,6 +121,9 @@ export function CodesManager({
   const [togglingIds, setTogglingIds] = useState<Record<string, true>>({});
   const [revokingIds, setRevokingIds] = useState<Record<string, true>>({});
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
+  const [reviewingCancelled, setReviewingCancelled] = useState<
+    AccessCodeListResult["items"][number] | null
+  >(null);
 
   useEffect(() => {
     if (!copiedCodeId) {
@@ -583,6 +587,15 @@ export function CodesManager({
                                   {code.attemptCount === 1 ? "" : "s"}
                                 </p>
                               ) : null}
+                              {code.cancelledAttempt ? (
+                                <button
+                                  type="button"
+                                  className="text-xs font-medium text-destructive underline underline-offset-2"
+                                  onClick={() => setReviewingCancelled(code)}
+                                >
+                                  Attempt cancelled · review
+                                </button>
+                              ) : null}
                             </div>
                           </TableCell>
                           <TableCell>
@@ -658,6 +671,15 @@ export function CodesManager({
           </AdminListResults>
         ) : null}
       </div>
+
+      <CancelledAttemptDialog
+        code={reviewingCancelled?.code ?? ""}
+        attempt={reviewingCancelled?.cancelledAttempt ?? null}
+        onOpenChange={(open) => {
+          if (!open) setReviewingCancelled(null);
+        }}
+        onReopened={invalidateCodes}
+      />
 
       <ConfirmDeleteDialog
         open={Boolean(pendingDelete)}

@@ -105,6 +105,7 @@ export const verification = pgTable(
 export const quizAttemptStatusEnum = pgEnum("quiz_attempt_status", [
   "in_progress",
   "completed",
+  "cancelled",
 ]);
 
 /**
@@ -175,6 +176,10 @@ export const quizSets = pgTable(
     isPublished: boolean("is_published").default(false).notNull(),
     /** Free mock: shared code, timer, public leaderboard. */
     isFreeMock: boolean("is_free_mock").default(false).notNull(),
+    /** Exam lockdown: leaving the exam window counts as a strike and can cancel the attempt. */
+    lockdownEnabled: boolean("lockdown_enabled").default(false).notNull(),
+    /** Leaves tolerated before the attempt is cancelled (0 = cancel on the first leave). */
+    allowedLeaves: integer("allowed_leaves").default(1).notNull(),
     createdById: text("created_by_id").references(() => user.id, {
       onDelete: "set null",
     }),
@@ -192,6 +197,14 @@ export const quizSets = pgTable(
     check(
       "quiz_sets_duration_minutes_positive",
       sql`${table.durationMinutes} > 0`,
+    ),
+    check(
+      "quiz_sets_lockdown_not_free_mock",
+      sql`NOT (${table.lockdownEnabled} AND ${table.isFreeMock})`,
+    ),
+    check(
+      "quiz_sets_allowed_leaves_range",
+      sql`${table.allowedLeaves} >= 0 AND ${table.allowedLeaves} <= 10`,
     ),
   ],
 );
@@ -371,6 +384,9 @@ export const quizAttempts = pgTable(
     maxScore: integer("max_score").notNull(),
     startedAt: timestamp("started_at").defaultNow().notNull(),
     completedAt: timestamp("completed_at"),
+    /** Set when lockdown cancelled the attempt (void, admin can reopen). */
+    cancelledAt: timestamp("cancelled_at"),
+    cancelReason: text("cancel_reason"),
   },
   (table) => [
     // One-time codes: at most one attempt per code (no participant name).
@@ -392,7 +408,7 @@ export const quizAttempts = pgTable(
     ),
     check(
       "quiz_attempts_completed_consistency",
-      sql`(${table.status} = 'in_progress' AND ${table.completedAt} IS NULL) OR (${table.status} = 'completed' AND ${table.completedAt} IS NOT NULL)`,
+      sql`(${table.status}::text = 'in_progress' AND ${table.completedAt} IS NULL AND ${table.cancelledAt} IS NULL) OR (${table.status}::text = 'completed' AND ${table.completedAt} IS NOT NULL AND ${table.cancelledAt} IS NULL) OR (${table.status}::text = 'cancelled' AND ${table.cancelledAt} IS NOT NULL AND ${table.completedAt} IS NULL)`,
     ),
     check(
       "quiz_attempts_participant_name_consistency",
@@ -454,6 +470,34 @@ export const attemptQuestionStates = pgTable(
       table.questionId,
     ),
     index("attempt_question_states_attempt_id_idx").on(table.attemptId),
+  ],
+);
+
+/**
+ * Leave events reported while a lockdown attempt is in progress. Only events
+ * with countsAsStrike (and not forgiven by an admin reset) count toward the
+ * set's allowed leaves.
+ */
+export const attemptLeaveEvents = pgTable(
+  "attempt_leave_events",
+  {
+    id: text("id").primaryKey(),
+    attemptId: text("attempt_id")
+      .notNull()
+      .references(() => quizAttempts.id, { onDelete: "cascade" }),
+    occurredAt: timestamp("occurred_at").defaultNow().notNull(),
+    /** Client-measured time away; null for unload (page closed/navigated). */
+    durationMs: integer("duration_ms"),
+    reason: text("reason").notNull(),
+    countsAsStrike: boolean("counts_as_strike").notNull(),
+    forgivenAt: timestamp("forgiven_at"),
+  },
+  (table) => [
+    index("attempt_leave_events_attempt_id_idx").on(table.attemptId),
+    check(
+      "attempt_leave_events_reason_valid",
+      sql`${table.reason} IN ('hidden', 'blur', 'fullscreen_exit', 'unload')`,
+    ),
   ],
 );
 
@@ -560,6 +604,7 @@ export const quizAttemptsRelations = relations(
     }),
     answers: many(attemptAnswers),
     questionStates: many(attemptQuestionStates),
+    leaveEvents: many(attemptLeaveEvents),
   }),
 );
 
@@ -592,6 +637,16 @@ export const attemptQuestionStatesRelations = relations(
     selectedOption: one(options, {
       fields: [attemptQuestionStates.selectedOptionId],
       references: [options.id],
+    }),
+  }),
+);
+
+export const attemptLeaveEventsRelations = relations(
+  attemptLeaveEvents,
+  ({ one }) => ({
+    attempt: one(quizAttempts, {
+      fields: [attemptLeaveEvents.attemptId],
+      references: [quizAttempts.id],
     }),
   }),
 );

@@ -65,3 +65,12 @@ export const unlockAnswerSheetSchema = z.object({
 });
 
 export type UnlockAnswerSheetInput = z.infer<typeof unlockAnswerSheetSchema>;
+
+export const reportLeaveSchema = z.object({
+  attemptId: z.string().min(1, "Attempt is required."),
+  reason: z.enum(["hidden", "blur", "fullscreen_exit", "unload"]),
+  /** Client-measured time away in ms; null for unload. */
+  durationMs: z.number().int().min(0).max(24 * 60 * 60 * 1000).nullable(),
+});
+
+export type ReportLeaveInput = z.infer<typeof reportLeaveSchema>;

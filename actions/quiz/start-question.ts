@@ -57,6 +57,12 @@ export async function startQuestion(
     with: { quizSet: { columns: { durationMinutes: true, isPublished: true } } },
   });
 
+  if (attempt?.status === "cancelled") {
+    return actionFailure("This attempt was cancelled.", {
+      reason: "cancelled",
+    });
+  }
+
   if (
     !attempt ||
     attempt.status !== "in_progress" ||

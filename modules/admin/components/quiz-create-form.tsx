@@ -32,6 +32,7 @@ import {
   SectionTimeShortcut,
 } from "@/modules/admin/components/question-time-controls";
 import { slugify } from "@/lib/slugify";
+import { LockdownSettingsField } from "@/modules/admin/components/lockdown-settings-field";
 import { SectionQuestionsPastePanel } from "@/modules/admin/components/section-questions-paste-panel";
 import { ConfirmDeleteDialog } from "@/modules/admin/components/confirm-delete-dialog";
 import { QuizQuestionsPreviewTrigger } from "@/modules/admin/components/quiz-questions-preview";
@@ -103,6 +104,8 @@ export function QuizCreateForm({
   const [durationMinutes, setDurationMinutes] = useState("120");
   const [isPublished, setIsPublished] = useState(false);
   const [isFreeMock, setIsFreeMock] = useState(false);
+  const [lockdownEnabled, setLockdownEnabled] = useState(false);
+  const [allowedLeaves, setAllowedLeaves] = useState("1");
   const [facultyId, setFacultyId] = useState(faculties[0]?.id ?? "");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [pendingSectionDelete, setPendingSectionDelete] = useState<{
@@ -225,6 +228,8 @@ export function QuizCreateForm({
       facultyId,
       isPublished,
       isFreeMock,
+      lockdownEnabled,
+      allowedLeaves,
       sections: sections.map((section) => {
         const fullMarks = section.questions.reduce(
           (sum, question) => sum + question.marks,
@@ -461,9 +466,20 @@ export function QuizCreateForm({
             <Switch
               id="quiz-free-mock"
               checked={isFreeMock}
+              disabled={lockdownEnabled}
               onCheckedChange={setIsFreeMock}
             />
           </div>
+          <LockdownSettingsField
+            idPrefix="quiz"
+            enabled={lockdownEnabled}
+            allowedLeaves={allowedLeaves}
+            onEnabledChange={setLockdownEnabled}
+            onAllowedLeavesChange={setAllowedLeaves}
+            isFreeMock={isFreeMock}
+            locked={false}
+            error={fieldErrors.lockdownEnabled ?? fieldErrors.allowedLeaves}
+          />
         </div>
       </section>
 

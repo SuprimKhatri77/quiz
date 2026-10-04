@@ -46,6 +46,7 @@ export async function cloneQuizSetAsFreeMock(
       facultyId: true,
       description: true,
       durationMinutes: true,
+      allowedLeaves: true,
       isFreeMock: true,
     },
     with: {
@@ -148,6 +149,9 @@ export async function cloneQuizSetAsFreeMock(
         durationMinutes: source.durationMinutes,
         isPublished: false,
         isFreeMock: true,
+        // Free mocks can't use lockdown; keep the leave allowance for reference only.
+        lockdownEnabled: false,
+        allowedLeaves: source.allowedLeaves,
         createdById: admin.adminId,
       });
 

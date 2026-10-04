@@ -50,6 +50,20 @@
       "when": 1791102215186,
       "tag": "0006_harsh_hardball",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791110420945,
+      "tag": "0007_orange_cable",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791111201954,
+      "tag": "0008_worried_lorna_dane",
+      "breakpoints": true
     }
   ]
 }
